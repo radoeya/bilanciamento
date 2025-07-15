@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Analisi e Gestione Personale</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.js"></script>
+
+    <style>
+        :root {
+            --primary-color: #0d47a1;
+            --secondary-color: #1e88e5;
+            --accent-color: #5c6bc0;
+            --success-color: #28a745; 
+            --danger-color: #dc3545;
+            --info-color: #17a2b8;
+            --light-gray: #f4f7f6;
+            --dark-gray: #333;
+            --white-color: #ffffff;
+            --border-color: #ddd;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0; padding: 2rem; background-color: var(--light-gray); color: var(--dark-gray);
+            display: flex; flex-direction: column; align-items: center;
+        }
+        h1, h2, h3, h4, h5 { color: var(--primary-color); font-weight: 600; }
+        .container {
+            background: var(--white-color); padding: 2rem; border-radius: 12px;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1); width: 95%; max-width: 1400px; margin-bottom: 2rem;
+        }
+        #controls {
+            display: flex; gap: 1.5rem; align-items: center; margin-bottom: 1rem;
+            flex-wrap: wrap; padding-bottom: 1.5rem; border-bottom: 1px solid var(--border-color);
+        }
+        #averageDisplay {
+            margin-left: auto; padding: 0.7rem 1rem; background-color: #eef7ff;
+            border: 2px solid var(--info-color); border-radius: 8px; font-size: 16px;
+            font-weight: 500; color: var(--primary-color); display: none;
+        }
+        input, select, button, textarea {
+            font-size: 16px; padding: 0.7rem 1rem; border-radius: 8px;
+            border: 1px solid #ccc; font-family: inherit; transition: all 0.3s ease;
+        }
+        input[type="file"]::file-selector-button {
+            background-color: var(--secondary-color); color: var(--white-color); border: none;
+            padding: 0.7rem 1rem; border-radius: 8px; cursor: pointer; transition: background-color 0.3s ease;
+        }
+        input[type="file"]::file-selector-button:hover { background-color: var(--primary-color); }
+        button { background-color: var(--secondary-color); color: var(--white-color); border: none; cursor: pointer; }
+        button:hover { background-color: var(--primary-color); transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.15); }
+        button:disabled { background-color: #9e9e9e; cursor: not-allowed; transform: none; box-shadow: none; }
+        
+        #dashboard { display: flex; flex-direction: column; gap: 2rem; width: 100%; margin-top: 1rem; }
+        #chartContainer { height: 400px; width: 100%; }
+        #calendarsWrapper { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; }
+        .calendar-container { height: 480px; }
+        .calendar-container h3 { text-align: center; margin-top: 0; margin-bottom: 10px; }
+        .calendar-instance { height: calc(100% - 30px); }
+
+        #balancingResults, #swapResults { margin-top: 2rem; padding: 1.5rem; background-color: #e3f2fd; border-left: 6px solid var(--secondary-color); border-radius: 8px; }
+        #balancingResults ul, #swapResults ul { list-style-type: none; padding-left: 0; }
+        #balancingResults li, #swapResults li { padding: 12px; border-radius: 6px; margin-bottom: 8px; transition: background-color 0.2s, transform 0.2s; border: 1px solid #90caf9; }
+        #balancingResults li { cursor: pointer; }
+        #balancingResults li:hover { background-color: #bbdefb; transform: scale(1.01); }
+
+        #swapHelper { border: 2px solid var(--accent-color); padding: 1.5rem; border-radius: 8px; scroll-margin-top: 20px; }
+        .swap-area { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin-top: 1rem; }
+        .swap-area-col label { display: block; margin-bottom: 0.5rem; font-weight: bold; }
+        .swap-area-col input[type="date"], .swap-area-col textarea { width: calc(100% - 2.2rem); margin-bottom: 0.5rem; }
+        .swap-area-col textarea { height: 150px; resize: vertical; }
+        .swap-area-col button { width: 100%; margin-top: 0.5rem; }
+        .parsed-list-container { border: 1px solid var(--border-color); margin-top: 1rem; padding: 0.5rem 1rem; border-radius: 5px; background-color: #fafafa; max-height: 200px; overflow-y: auto; }
+        .parsed-list-container h5 { margin: 10px 0 5px 0; padding-bottom: 5px; border-bottom: 1px solid #eee; }
+        .parsed-list-container ul { list-style-type: none; padding-left: 5px; margin-top: 5px; }
+        
+        #tableContainer { margin-top: 2.5rem; width: 100%; overflow-x: auto; }
+        #dataTable { width: 100%; border-collapse: collapse; font-size: 14px; }
+        #dataTable caption { caption-side: bottom; text-align: right; font-size: 12px; color: #666; padding-top: 10px; }
+        #dataTable th, #dataTable td { border: 1px solid var(--border-color); padding: 10px; text-align: left; white-space: nowrap; }
+        hr { border: none; border-top: 1px solid #ccc; margin: 2rem 0; }
+        
+        @media (max-width: 1200px) { #calendarsWrapper { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Dashboard Analisi Personale 📊</h1>
+        <div id="controls">
+            <input type="file" id="excelFile" accept=".xlsx, .xls, .csv" onchange="handleFile()">
+            <label for="rowSelector">Scegli una voce da analizzare:</label>
+            <select id="rowSelector" onchange="plotSelectedData()" disabled></select>
+            <button id="balanceBtn" onclick="balancePersonnel()" disabled>Suggerisci Bilanciamento</button>
+            <div id="averageDisplay"></div>
+        </div>
+        
+        <div id="dashboard" style="display: none;">
+            <div id="chartContainer"><canvas id="myChart"></canvas></div>
+            <div id="calendarsWrapper">
+                <div class="calendar-container" id="originalCalendarContainer">
+                    <h3 id="originalCalendarTitle"></h3>
+                    <div id="calendarOriginal" class="calendar-instance"></div>
+                </div>
+                <div class="calendar-container" id="balancedCalendarContainer" style="display: none;">
+                    <h3 id="balancedCalendarTitle"></h3>
+                    <div id="calendarBalanced" class="calendar-instance"></div>
+                </div>
+            </div>
+            <div id="balancingResults" style="display: none;"></div>
+        </div>
+    </div>
+
+    <div class="container" id="swapHelper">
+        <h2>Assistente Scambio Turni 🛠️</h2>
+        <p>Usa le proposte di bilanciamento o i calendari per identificare i giorni per lo scambio, poi inserisci qui le liste del personale.</p>
+        <div class="swap-area">
+            <div class="swap-area-col">
+                <label for="date1">1. Giorno con CARENZA di personale:</label>
+                <input type="date" id="date1">
+                <label for="list1" style="margin-top: 1rem;">2. Incolla qui la lista del personale LIBERO:</label>
+                <textarea id="list1" placeholder="Incolla qui la lista..."></textarea>
+                <button onclick="processList(1)">Elabora Lista 1</button>
+                <div class="parsed-list-container" id="parsedList1"></div>
+            </div>
+            <div class="swap-area-col">
+                <label for="date2">1. Giorno con ESUBERO di personale:</label>
+                <input type="date" id="date2">
+                <label for="list2" style="margin-top: 1rem;">2. Incolla qui la lista del personale DI RISERVA:</label>
+                <textarea id="list2" placeholder="Incolla qui la lista..."></textarea>
+                <button onclick="processList(2)">Elabora Lista 2</button>
+                <div class="parsed-list-container" id="parsedList2"></div>
+                
+                <hr>
+                <h4>Nuovo: Analisi Turni Liberi</h4>
+                <label for="unassignedShifts">3. Incolla qui i turni NON assegnati:</label>
+                <textarea id="unassignedShifts" placeholder="Incolla qui la lista dei turni liberi..." style="height: 100px;"></textarea>
+                <button onclick="analyzeRealAvailability()">4. Analizza Disponibilità Reale</button>
+                <div id="realAvailabilityResults" class="parsed-list-container" style="display: none;"></div>
+            </div>
+        </div>
+        <button id="findCommonBtn" onclick="findCommonEmployees()" style="margin-top: 1.5rem; width: 100%;" disabled>5. Trova Collaboratori in Comune (o Piano B)</button>
+        <div id="swapResults" style="display: none;"></div>
+    </div>
+    
+    <div class="container" id="tableContainer" style="display: none;">
+        <h2>Dettaglio Dati Importati</h2>
+        <table id="dataTable"></table>
+    </div>
+
+    <script>
+        // --- Variabili Globali ---
+        let myChart = null, calendarOriginal = null, calendarBalanced = null;
+        let jsonData = [], headers = [], originalData = {};
+        let processedList1 = [], processedList2 = [];
+        let isList1Processed = false, isList2Processed = false;
+        let openShiftsAnalysis = null;
+        const displayLimit = 200;
+
+        // --- Funzioni di Utilità e Caricamento ---
+        function convertDateToISO(dateStr) {
+            const parts = String(dateStr).split('.');
+            if (parts.length !== 3) return null;
+            return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+        }
+
+        async function handleFile() {
+            const fileInput = document.getElementById('excelFile');
+            if (!fileInput.files[0]) return;
+            const data = await fileInput.files[0].arrayBuffer();
+            const workbook = XLSX.read(data);
+            const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+            const matrix = XLSX.utils.sheet_to_json(worksheet, { header: 1, skipHidden: true, defval: 0 });
+            let headerRowIndex = matrix.findIndex(row => row.length > 2);
+            if (headerRowIndex === -1) { alert("Intestazione non trovata."); return; }
+            const headerRow = matrix[headerRowIndex];
+            headers = headerRow.filter(h => h);
+            jsonData = matrix.slice(headerRowIndex + 1).map(row => {
+                const obj = {};
+                headers.forEach((header, index) => {
+                    const rawValue = row[index];
+                    let cleanValue = (typeof rawValue === 'number' || (typeof rawValue === 'string' && rawValue.trim() !== '')) ? parseFloat(rawValue) : 0;
+                    if (isNaN(cleanValue) || cleanValue < 0) cleanValue = 0;
+                    obj[header] = index === 0 ? rawValue : cleanValue;
+                });
+                return obj;
+            }).filter(obj => obj[headers[0]]);
+            const selector = document.getElementById('rowSelector');
+            selector.innerHTML = '<option value="">-- Seleziona --</option>';
+            jsonData.slice(0, displayLimit).forEach((row, index) => {
+                selector.appendChild(new Option(row[headers[0]], index));
+            });
+            if (jsonData.length > displayLimit) {
+                const option = new Option(`E ${jsonData.length - displayLimit} altre voci non mostrate...`, '');
+                option.disabled = true;
+                selector.appendChild(option);
+            }
+            selector.disabled = false;
+            document.getElementById('balanceBtn').disabled = true;
+            document.getElementById('tableContainer').style.display = 'block';
+            document.getElementById('dashboard').style.display = 'none';
+            document.getElementById('balancingResults').style.display = 'none';
+            document.getElementById('averageDisplay').style.display = 'none';
+            if (myChart) myChart.destroy();
+            if (calendarOriginal) calendarOriginal.destroy();
+            if (calendarBalanced) calendarBalanced.destroy();
+            displayTable();
+        }
+
+        function displayTable() {
+            const table = document.getElementById('dataTable');
+            table.innerHTML = '';
+            const thead = table.createTHead().insertRow();
+            headers.forEach(text => thead.appendChild(document.createElement('th')).textContent = text);
+            const tbody = table.createTBody();
+            jsonData.slice(0, displayLimit).forEach(dataRow => {
+                const row = tbody.insertRow();
+                headers.forEach(header => row.insertCell().textContent = dataRow[header] !== undefined ? dataRow[header] : '');
+            });
+            if (jsonData.length > displayLimit) {
+                const caption = table.createCaption();
+                caption.textContent = `Mostrando un'anteprima delle prime ${displayLimit} righe. Tutti i dati sono caricati per le analisi.`;
+            }
+        }
+
+        function plotSelectedData() {
+            const selector = document.getElementById('rowSelector');
+            if (!selector.value) {
+                document.getElementById('dashboard').style.display = 'none';
+                document.getElementById('averageDisplay').style.display = 'none';
+                document.getElementById('balanceBtn').disabled = true;
+                return;
+            }
+            document.getElementById('dashboard').style.display = 'flex';
+            document.getElementById('balanceBtn').disabled = false;
+            const selectedRowData = jsonData[selector.value];
+            const chartLabels = headers.slice(1);
+            const chartValues = chartLabels.map(header => selectedRowData[header]);
+            originalData = { labels: [...chartLabels], values: [...chartValues], title: selectedRowData[headers[0]] };
+            const validValues = chartValues.filter(v => v >= 0);
+            if (validValues.length > 0) {
+                const total = validValues.reduce((sum, val) => sum + val, 0);
+                const average = total / validValues.length;
+                document.getElementById('averageDisplay').innerHTML = `📈 Media Mensile: <b>${average.toFixed(2)}</b>`;
+                document.getElementById('averageDisplay').style.display = 'block';
+            }
+            document.getElementById('balancingResults').style.display = 'none';
+            document.getElementById('balancedCalendarContainer').style.display = 'none';
+            document.getElementById('calendarsWrapper').style.gridTemplateColumns = '1fr';
+            plotChart(originalData.title, originalData.labels, originalData.values);
+            renderSingleCalendar('calendarOriginal', "Situazione Originale", originalData.labels, originalData.values);
+        }
+
+        function renderSingleCalendar(elementId, title, labels, values) {
+            const container = document.getElementById(elementId);
+            const titleEl = document.getElementById(elementId.replace('calendar', 'calendarTitle'));
+            if(titleEl) titleEl.textContent = title;
+            let firstDate = null;
+            const events = labels.map((label, index) => {
+                const value = values[index];
+                if (value > 0) {
+                    const dateISO = convertDateToISO(label);
+                    if (dateISO) {
+                        if (!firstDate) firstDate = dateISO;
+                        return { title: `👤 ${value}`, start: dateISO, allDay: true, color: '#17a2b8', borderColor: '#17a2b8' };
+                    }
+                }
+                return null;
+            }).filter(Boolean);
+            let calendarVar = (elementId === 'calendarOriginal') ? calendarOriginal : calendarBalanced;
+            if (calendarVar) calendarVar.destroy();
+            calendarVar = new FullCalendar.Calendar(container, {
+                initialDate: firstDate, initialView: 'dayGridMonth', locale: 'it',
+                headerToolbar: { left: 'prev,next today', center: 'title', right: 'dayGridMonth,timeGridWeek' },
+                events: events, height: '100%'
+            });
+            calendarVar.render();
+            if (elementId === 'calendarOriginal') calendarOriginal = calendarVar; else calendarBalanced = calendarVar;
+        }
+
+        function balancePersonnel() {
+            const values = [...originalData.values];
+            const labels = [...originalData.labels];
+            const title = originalData.title;
+            const validValues = values.filter(v => v >= 0);
+            if(validValues.length === 0) return;
+            const average = validValues.reduce((sum, val) => sum + val, 0) / validValues.length;
+            let balancedValues = [...values];
+            let rawSwaps = [];
+            for (let i = 0; i < values.length * 2; i++) {
+                let diffs = balancedValues.map(val => val < 0 ? 0 : val - average);
+                let maxIdx = diffs.indexOf(Math.max(...diffs));
+                let minIdx = diffs.indexOf(Math.min(...diffs));
+                if (balancedValues[maxIdx] <= Math.ceil(average) || balancedValues[minIdx] >= Math.floor(average) || maxIdx === minIdx) break;
+                balancedValues[maxIdx]--;
+                balancedValues[minIdx]++;
+                rawSwaps.push({ from: labels[maxIdx], to: labels[minIdx] });
+            }
+            const aggregatedSwaps = new Map();
+            rawSwaps.forEach(swap => {
+                const key = `${swap.from}|${swap.to}`;
+                aggregatedSwaps.set(key, (aggregatedSwaps.get(key) || 0) + 1);
+            });
+            const resultsDiv = document.getElementById('balancingResults');
+            resultsDiv.style.display = 'block';
+            let suggestionsHTML = `<h3>Proposte di Bilanciamento per "${title}"</h3><p>Media Personale/Giorno: <b>${average.toFixed(2)}</b>. Clicca un suggerimento per pre-compilare le date nell'assistente.</p>`;
+            if (aggregatedSwaps.size > 0) {
+                suggestionsHTML += '<ul>';
+                aggregatedSwaps.forEach((count, key) => {
+                    const [from, to] = key.split('|');
+                    suggestionsHTML += `<li onclick="selectSwapDates('${convertDateToISO(to)}', '${convertDateToISO(from)}')">Sposta <b>${count}</b> ${count > 1 ? 'persone' : 'persona'} dal <b>${from}</b> al <b>${to}</b></li>`;
+                });
+                suggestionsHTML += '</ul>';
+            } else {
+                suggestionsHTML += "<p>Il personale è già distribuito in modo ottimale.</p>";
+            }
+            resultsDiv.innerHTML = suggestionsHTML;
+            document.getElementById('calendarsWrapper').style.gridTemplateColumns = '1fr 1fr';
+            document.getElementById('balancedCalendarContainer').style.display = 'block';
+            plotChartComparison(title, labels, values, balancedValues);
+            renderSingleCalendar('calendarOriginal', "Situazione Originale", labels, values);
+            renderSingleCalendar('calendarBalanced', "Situazione Post-Bilanciamento", labels, balancedValues);
+        }
+        
+        function selectSwapDates(isoToDate, isoFromDate) {
+            document.getElementById('date1').value = isoToDate;
+            document.getElementById('date2').value = isoFromDate;
+            document.getElementById('swapHelper').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+
+        function plotChart(title, labels, values) {
+            renderChart(`Andamento per: ${title}`, labels, [{ label: title, data: [...values], borderColor: '#1e88e5', backgroundColor: 'rgba(30, 136, 229, 0.2)', fill: true, tension: 0.2 }]);
+        }
+        function plotChartComparison(title, labels, originalValues, balancedValues) {
+            renderChart(`Confronto Bilanciamento per: ${title}`, labels, [
+                { label: 'Originale', data: [...originalValues], borderColor: '#dc3545', fill: false, tension: 0.2 },
+                { label: 'Bilanciato', data: [...balancedValues], borderColor: '#28a745', fill: false, tension: 0.2 }
+            ]);
+        }
+        function renderChart(title, labels, datasets) {
+            const ctx = document.getElementById('myChart').getContext('2d');
+            if (myChart) myChart.destroy();
+            myChart = new Chart(ctx, { type: 'line', data: { labels, datasets }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top' }, title: { display: true, text: title, font: { size: 18 } } } } });
+        }
+        
+        function processList(listNumber) {
+            const text = document.getElementById(`list${listNumber}`).value;
+            if (!text) { alert(`La Lista ${listNumber} è vuota.`); return; }
+            const parsedListContainer = document.getElementById(`parsedList${listNumber}`);
+            const processedData = parseEmployeeList(text);
+            if (listNumber === 1) { processedList1 = processedData; isList1Processed = true; } 
+            else { processedList2 = processedData; isList2Processed = true; }
+            if (processedData.length === 0) {
+                parsedListContainer.innerHTML = `<p>Nessun collaboratore valido trovato.</p>`; return;
+            }
+            const presto = processedData.filter(e => e.shiftType === 'Presto');
+            const medio = processedData.filter(e => e.shiftType === 'Medio');
+            const tardi = processedData.filter(e => e.shiftType === 'Tardi');
+            let html = `<h4>Trovati ${processedData.length} collaboratori:</h4>`;
+            if (presto.length > 0) {
+                html += '<h5>Turni Presto ☀️</h5><ul>';
+                presto.forEach(emp => { html += `<li>${emp.name} (ID: ${emp.id})</li>`; });
+                html += '</ul>';
+            }
+            if (medio.length > 0) {
+                html += '<h5>Turni Medio 🕛</h5><ul>';
+                medio.forEach(emp => { html += `<li>${emp.name} (ID: ${emp.id})</li>`; });
+                html += '</ul>';
+            }
+            if (tardi.length > 0) {
+                html += '<h5>Turni Tardi 🌙</h5><ul>';
+                tardi.forEach(emp => { html += `<li>${emp.name} (ID: ${emp.id})</li>`; });
+                html += '</ul>';
+            }
+            parsedListContainer.innerHTML = html;
+            if (isList1Processed && isList2Processed) document.getElementById('findCommonBtn').disabled = false;
+        }
+
+        function parseEmployeeList(text) {
+            const employees = [];
+            const lines = text.split('\n').filter(line => line.trim() !== '');
+            const idRegex = /\b(\d{6})\b/;
+            lines.forEach(line => {
+                const match = line.match(idRegex);
+                if (match) {
+                    const id = match[1];
+                    const parts = line.substring(0, match.index).split(/\s+/).filter(p => p);
+                    let name = "Nome non trovato";
+                    if (parts.length >= 2) name = parts.slice(-2).join(' ');
+                    let shiftType = 'Medio';
+                    if (line.includes('Früh') || line.includes('Presto')) shiftType = 'Presto';
+                    else if (line.includes('Spät') || line.includes('Tardi')) shiftType = 'Tardi';
+                    employees.push({ id, name, shiftType });
+                }
+            });
+            return employees;
+        }
+        
+        function findCommonEmployees() {
+            const resultsDiv = document.getElementById('swapResults');
+            resultsDiv.style.display = 'block';
+            resultsDiv.innerHTML = '';
+            const idsInList2 = new Set(processedList2.map(emp => emp.id));
+            const commonEmployees = processedList1.filter(emp => idsInList2.has(emp.id));
+            if (commonEmployees.length > 0) {
+                let html = `<h4>Risultato: ${commonEmployees.length} Collaboratori Comuni (Scambio Diretto)</h4><ul>`;
+                commonEmployees.forEach(emp => {
+                    const name = emp.name;
+                    const date1 = new Date(document.getElementById('date1').value).toLocaleDateString('it-CH');
+                    const date2 = new Date(document.getElementById('date2').value).toLocaleDateString('it-CH');
+                    const subject = encodeURIComponent(`Proposta Scambio Turno: ${name}`);
+                    const body = encodeURIComponent(`Ciao ${name},\n\nSaresti disponibile a spostare il tuo servizio dal giorno ${date2} al giorno ${date1}?\n\nFammi sapere. Grazie!`);
+                    html += `<li><span>${name} (ID: ${emp.id})</span><a href="mailto:?subject=${subject}&body=${body}" style="text-decoration: none;"><button type="button">Invia Email</button></a></li>`;
+                });
+                html += '</ul>';
+                resultsDiv.innerHTML = html;
+                return;
+            }
+            if (openShiftsAnalysis && openShiftsAnalysis.count > 0) {
+                const cascadingProposals = [];
+                let freeStaff = [...processedList1];
+                let reserveStaff = [...processedList2];
+                let needed = {...openShiftsAnalysis.needed};
+                ['Presto', 'Medio', 'Tardi'].forEach(shiftType => {
+                    if (needed[shiftType] > 0) {
+                        const potentialReplacements = freeStaff.filter(s => s.shiftType === shiftType);
+                        const potentialFreed = reserveStaff.filter(s => s.shiftType === shiftType);
+                        const possibleSwaps = Math.min(potentialReplacements.length, potentialFreed.length, needed[shiftType]);
+                        for(let i=0; i < possibleSwaps; i++) {
+                            cascadingProposals.push({ toFree: potentialFreed[i], replacement: potentialReplacements[i] });
+                        }
+                    }
+                });
+                if(cascadingProposals.length > 0) {
+                    let html = '<h4>Nessuno scambio diretto. Possibili soluzioni alternative (Piano B):</h4><ul>';
+                    cascadingProposals.forEach(p => {
+                        html += `<li>Puoi liberare <b>${p.toFree.name}</b> (${p.toFree.shiftType}) facendolo coprire da <b>${p.replacement.name}</b> (${p.replacement.shiftType}).</li>`;
+                    });
+                    html += '</ul>';
+                    resultsDiv.innerHTML = html;
+                    return;
+                }
+            }
+            resultsDiv.innerHTML = '<h4 style="text-align: center;">Nessun collaboratore in comune trovato e nessuna soluzione alternativa possibile.</h4>';
+        }
+
+        // --- ANALISI AVANZATA ---
+        
+        // MODIFICATO: Logica di categorizzazione definitiva basata sulle nuove regole
+        function parseUnassignedShifts(text) {
+            const shifts = [];
+            const lines = text.split('\n').filter(line => line.trim() !== '');
+            const timeRegex = /\bCHI\s+(\d{2}):(\d{2})\s+(\d{2}):(\d{2})/;
+            
+            lines.forEach(line => {
+                const timeMatch = line.match(timeRegex);
+                let shiftType;
+
+                if (timeMatch) {
+                    const startHour = parseInt(timeMatch[1], 10);
+                    let endHour = parseInt(timeMatch[3], 10);
+                    if (endHour < startHour) endHour += 24;
+                    
+                    if (startHour < 7) {
+                        shiftType = 'Presto';
+                    } else if (startHour >= 13) {
+                        shiftType = 'Tardi';
+                    } else if (startHour >= 7 && endHour <= 19) {
+                        shiftType = 'Medio';
+                    } else {
+                        shiftType = 'Tardi'; // Default per turni lunghi che finiscono tardi
+                    }
+                } else {
+                    if (line.includes('Früh')) shiftType = 'Presto';
+                    else if (line.includes('Spät') || line.includes('Nacht')) { // AGGIUNTO: 'Nacht' è considerato 'Tardi'
+                        shiftType = 'Tardi';
+                    }
+                    else shiftType = 'Medio';
+                }
+                shifts.push({ shiftType: shiftType });
+            });
+            return shifts;
+        }
+        
+        function analyzeRealAvailability() {
+            const unassignedShiftsText = document.getElementById('unassignedShifts').value;
+            const resultsContainer = document.getElementById('realAvailabilityResults');
+            if (processedList2.length === 0) { alert("Elabora prima la lista del personale di riserva."); return; }
+            if (unassignedShiftsText.trim() === '') {
+                openShiftsAnalysis = null;
+                resultsContainer.style.display = 'none';
+                return;
+            }
+            const openShifts = parseUnassignedShifts(unassignedShiftsText);
+            const needed = { Presto: 0, Medio: 0, Tardi: 0 };
+            openShifts.forEach(shift => { needed[shift.shiftType]++; });
+            openShiftsAnalysis = { needed, count: openShifts.length, shifts: openShifts };
+            let availableStaff = JSON.parse(JSON.stringify(processedList2));
+            let assignedStaff = [];
+            let neededShifts = {...needed};
+            ['Presto', 'Medio', 'Tardi'].forEach(shiftType => {
+                const staffForShift = availableStaff.filter(s => s.shiftType === shiftType);
+                const assignments = Math.min(staffForShift.length, neededShifts[shiftType]);
+                for (let i = 0; i < assignments; i++) {
+                    const staffToAssign = staffForShift[i];
+                    assignedStaff.push(staffToAssign);
+                    availableStaff = availableStaff.filter(s => s.id !== staffToAssign.id);
+                }
+            });
+            displayRealAvailability(availableStaff, assignedStaff, needed);
+            resultsContainer.style.display = 'block';
+        }
+
+        function displayRealAvailability(trulyFreeStaff, assignedStaff, needed) {
+            const container = document.getElementById('realAvailabilityResults');
+            const totalNeeded = openShiftsAnalysis.count;
+            let html = `<h4>Risultati Analisi</h4>`;
+            html += `<p>Trovati <b>${totalNeeded}</b> turni liberi: ${needed.Presto} Presto, ${needed.Tardi} Tardi, ${needed.Medio} Medio.</p>`;
+            if(assignedStaff.length > 0) {
+                html += `<h5>Personale Utilizzato (${assignedStaff.length}):</h5><ul>`;
+                assignedStaff.forEach(emp => { html += `<li>${emp.name} (${emp.shiftType})</li>`; });
+                html += `</ul>`;
+            }
+            if(trulyFreeStaff.length > 0) {
+                html += `<h5>✅ Personale Realmente Disponibile (${trulyFreeStaff.length}):</h5><ul>`;
+                trulyFreeStaff.forEach(emp => { html += `<li><b>${emp.name}</b> (${emp.shiftType})</li>`; });
+                html += `</ul>`;
+            } else {
+                html += `<h5>Nessun collaboratore realmente disponibile.</h5>`;
+            }
+            container.innerHTML = html;
+        }
+    </script>
+</body>
+</html>
