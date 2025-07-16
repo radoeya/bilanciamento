@@ -65,6 +65,7 @@
         #balancingResults li, #swapResults li { padding: 12px; border-radius: 6px; margin-bottom: 8px; transition: background-color 0.2s, transform 0.2s; border: 1px solid #90caf9; }
         #balancingResults li { cursor: pointer; }
         #balancingResults li:hover { background-color: #bbdefb; transform: scale(1.01); }
+        #swapResults li { display: flex; justify-content: space-between; align-items: center; }
 
         #swapHelper { border: 2px solid var(--accent-color); padding: 1.5rem; border-radius: 8px; scroll-margin-top: 20px; }
         .swap-area { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin-top: 1rem; }
@@ -402,22 +403,53 @@
             const resultsDiv = document.getElementById('swapResults');
             resultsDiv.style.display = 'block';
             resultsDiv.innerHTML = '';
+            
+            const dateValue1 = document.getElementById('date1').value;
+            const dateValue2 = document.getElementById('date2').value;
+            if (!dateValue1 || !dateValue2) {
+                resultsDiv.innerHTML = '<h4 style="text-align: center; color: var(--danger-color);">Seleziona entrambe le date prima di procedere.</h4>';
+                return;
+            }
+
             const idsInList2 = new Set(processedList2.map(emp => emp.id));
             const commonEmployees = processedList1.filter(emp => idsInList2.has(emp.id));
+
             if (commonEmployees.length > 0) {
                 let html = `<h4>Risultato: ${commonEmployees.length} Collaboratori Comuni (Scambio Diretto)</h4><ul>`;
                 commonEmployees.forEach(emp => {
-                    const name = emp.name;
-                    const date1 = new Date(document.getElementById('date1').value).toLocaleDateString('it-CH');
-                    const date2 = new Date(document.getElementById('date2').value).toLocaleDateString('it-CH');
-                    const subject = encodeURIComponent(`Proposta Scambio Turno: ${name}`);
-                    const body = encodeURIComponent(`Ciao ${name},\n\nSaresti disponibile a spostare il tuo servizio dal giorno ${date2} al giorno ${date1}?\n\nFammi sapere. Grazie!`);
-                    html += `<li><span>${name} (ID: ${emp.id})</span><a href="mailto:?subject=${subject}&body=${body}" style="text-decoration: none;"><button type="button">Invia Email</button></a></li>`;
+                    const name = emp.name.split(' ').map(n => n.charAt(0).toUpperCase() + n.slice(1).toLowerCase()).join(' '); // Capitalize name
+                    
+                    const dateObj1 = new Date(dateValue1);
+                    const dateObj2 = new Date(dateValue2);
+
+                    const dateToWork = dateObj1.toLocaleDateString('it-IT', { day: 'numeric', month: 'long' });
+                    const dateToFree = dateObj2.toLocaleDateString('it-IT', { day: 'numeric', month: 'long' });
+                    const monthName = dateObj1.toLocaleString('it-IT', { month: 'long' });
+
+                    const subject = `Proposta cambio turno - ${name}`;
+                    const body = `Buongiorno ${name},
+
+Stiamo allestendo la distribuzione di ${monthName} e, per poter ottimizzare la pianificazione fino a fine anno, vorremmo chiederti se potresti effettuare i seguenti cambi di turni:
+
+- Fare libero il ${dateToFree}
+- In cambio lavorare il giorno ${dateToWork}
+
+Grazie mille per farci sapere (puoi rispondere direttamente a questa mail).
+
+Buona giornata
+
+Saluti
+Pianificatore delle risorse
+P-O-BP-ZFR-MSD-EIN`;
+
+                    const mailtoLink = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+                    html += `<li><span>${name} (ID: ${emp.id})</span><a href="${mailtoLink}" style="text-decoration: none;"><button type="button">Invia Email</button></a></li>`;
                 });
                 html += '</ul>';
                 resultsDiv.innerHTML = html;
                 return;
             }
+            
             if (openShiftsAnalysis && openShiftsAnalysis.count > 0) {
                 const cascadingProposals = [];
                 let freeStaff = [...processedList1];
@@ -443,12 +475,12 @@
                     return;
                 }
             }
+
             resultsDiv.innerHTML = '<h4 style="text-align: center;">Nessun collaboratore in comune trovato e nessuna soluzione alternativa possibile.</h4>';
         }
 
         // --- ANALISI AVANZATA ---
         
-        // MODIFICATO: Logica di categorizzazione definitiva basata sulle nuove regole
         function parseUnassignedShifts(text) {
             const shifts = [];
             const lines = text.split('\n').filter(line => line.trim() !== '');
@@ -474,7 +506,7 @@
                     }
                 } else {
                     if (line.includes('Früh')) shiftType = 'Presto';
-                    else if (line.includes('Spät') || line.includes('Nacht')) { // AGGIUNTO: 'Nacht' è considerato 'Tardi'
+                    else if (line.includes('Spät') || line.includes('Nacht')) {
                         shiftType = 'Tardi';
                     }
                     else shiftType = 'Medio';
