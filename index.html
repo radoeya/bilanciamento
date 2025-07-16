@@ -308,10 +308,22 @@
             resultsDiv.style.display = 'block';
             let suggestionsHTML = `<h3>Proposte di Bilanciamento per "${title}"</h3><p>Media Personale/Giorno: <b>${average.toFixed(2)}</b>. Clicca un suggerimento per pre-compilare le date nell'assistente.</p>`;
             if (aggregatedSwaps.size > 0) {
-                suggestionsHTML += '<ul>';
-                aggregatedSwaps.forEach((count, key) => {
+                // MODIFICA: Converti la mappa in un array per ordinarla
+                const proposalsArray = Array.from(aggregatedSwaps, ([key, count]) => {
                     const [from, to] = key.split('|');
-                    suggestionsHTML += `<li onclick="selectSwapDates('${convertDateToISO(to)}', '${convertDateToISO(from)}')">Sposta <b>${count}</b> ${count > 1 ? 'persone' : 'persona'} dal <b>${from}</b> al <b>${to}</b></li>`;
+                    return { from, to, count };
+                });
+
+                // MODIFICA: Ordina l'array per data "from" in ordine cronologico
+                proposalsArray.sort((a, b) => {
+                    // Usa la funzione esistente per creare stringhe di data confrontabili (YYYY-MM-DD)
+                    return convertDateToISO(a.from).localeCompare(convertDateToISO(b.from));
+                });
+
+                suggestionsHTML += '<ul>';
+                // MODIFICA: Itera sull'array ordinato invece che sulla mappa
+                proposalsArray.forEach(proposal => {
+                    suggestionsHTML += `<li onclick="selectSwapDates('${convertDateToISO(proposal.to)}', '${convertDateToISO(proposal.from)}')">Sposta <b>${proposal.count}</b> ${proposal.count > 1 ? 'persone' : 'persona'} dal <b>${proposal.from}</b> al <b>${proposal.to}</b></li>`;
                 });
                 suggestionsHTML += '</ul>';
             } else {
