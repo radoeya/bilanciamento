@@ -539,8 +539,12 @@
                     const monthObj = new Date(employeeData.swaps[0].dateToWork);
                     const monthName = monthObj.toLocaleString('it-IT', { month: 'long' });
 
-                    let body = `Buongiorno ${employeeData.name},\n\n` +
-                               `Stiamo allestendo la distribuzione di ${monthName} e, per poter ottimizzare la pianificazione fino a fine anno, vorremmo chiederti se potessi effettuare i seguenti cambi di turni:\n\n`;
+                   const primoNome = employeeData.name.split(' ')[1];
+
+  // 2. Usa 'primoNome' nel saluto invece di 'employeeData.name'
+  let body = `Buongiorno ${primoNome},\n\n` +
+             `Stiamo allestendo la distribuzione di ${monthName} e, per poter ottimizzare la pianificazione fino a fine anno, vorremmo chiederti se potessi effettuare i seguenti cambi di turni:\n\n`;
+  
 
                     employeeData.swaps.forEach((swap, index) => {
                          const dateObjToWork = new Date(swap.dateToWork);
