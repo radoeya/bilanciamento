@@ -150,7 +150,7 @@
         let proposalCounter = 0; // MODIFICA: Contatore per ID unici delle proposte
         const displayLimit = 200;
 
-        // --- Funzioni di Utilità e Caricamento (INVARIATE) ---
+        // --- Funzioni di Utilità e Caricamento ---
         function convertDateToISO(dateStr) {
             const parts = String(dateStr).split('.');
             if (parts.length !== 3) return null;
@@ -216,7 +216,7 @@
             }
         }
 
-        // --- Funzioni Grafici e Calendari (INVARIATE) ---
+        // --- Funzioni Grafici e Calendari ---
         function plotSelectedData() {
             const selector = document.getElementById('rowSelector');
             if (!selector.value) {
@@ -272,25 +272,82 @@
             if (elementId === 'calendarOriginal') calendarOriginal = calendarVar; else calendarBalanced = calendarVar;
         }
 
-        // --- Funzioni di Bilanciamento e Grafici (Logica Principale INVARIATA, MODIFICATO il click) ---
+        // --- Funzioni di Bilanciamento e Grafici ---
+        
+        // MODIFIED FUNCTION: Implements a two-stage balancing logic.
+        // Stage 1: Balance within each month individually.
+        // Stage 2: Balance across the entire period to resolve inter-month differences.
         function balancePersonnel() {
             const values = [...originalData.values];
             const labels = [...originalData.labels];
             const title = originalData.title;
             const validValues = values.filter(v => v >= 0);
             if(validValues.length === 0) return;
-            const average = validValues.reduce((sum, val) => sum + val, 0) / validValues.length;
+
+            const globalAverage = validValues.reduce((sum, val) => sum + val, 0) / validValues.length;
             let balancedValues = [...values];
             let rawSwaps = [];
+
+            // --- STAGE 1: INTRA-MONTH BALANCING ---
+            
+            // Group data by month ('YYYY-MM')
+            const months = {};
+            labels.forEach((label, index) => {
+                const isoDate = convertDateToISO(label);
+                if (!isoDate) return;
+                const monthKey = isoDate.substring(0, 7); // e.g., '2025-01'
+                if (!months[monthKey]) {
+                    months[monthKey] = [];
+                }
+                months[monthKey].push({ label, value: values[index], originalIndex: index });
+            });
+
+            // Loop through each month and balance it internally
+            const sortedMonthKeys = Object.keys(months).sort();
+            for (const monthKey of sortedMonthKeys) {
+                const monthData = months[monthKey];
+                const monthValues = monthData.map(d => balancedValues[d.originalIndex]);
+                const validMonthValues = monthValues.filter(v => v >= 0);
+                if (validMonthValues.length <= 1) continue;
+
+                const monthlyAverage = validMonthValues.reduce((sum, val) => sum + val, 0) / validMonthValues.length;
+
+                // Balancing loop for the current month
+                for (let i = 0; i < monthData.length * 2; i++) {
+                    let diffs = monthData.map(d => balancedValues[d.originalIndex] < 0 ? -Infinity : balancedValues[d.originalIndex] - monthlyAverage);
+                    let maxInMonthIdx = diffs.indexOf(Math.max(...diffs));
+                    let minInMonthIdx = diffs.indexOf(Math.min(...diffs));
+
+                    const globalMaxIdx = monthData[maxInMonthIdx].originalIndex;
+                    const globalMinIdx = monthData[minInMonthIdx].originalIndex;
+
+                    if (balancedValues[globalMaxIdx] <= Math.ceil(monthlyAverage) || balancedValues[globalMinIdx] >= Math.floor(monthlyAverage) || globalMaxIdx === globalMinIdx) {
+                        break; // This month is balanced
+                    }
+
+                    balancedValues[globalMaxIdx]--;
+                    balancedValues[globalMinIdx]++;
+                    rawSwaps.push({ from: labels[globalMaxIdx], to: labels[globalMinIdx] });
+                }
+            }
+
+            // --- STAGE 2: INTER-MONTH (GLOBAL) BALANCING ---
+            // After local optimization, balance the remaining differences globally
             for (let i = 0; i < values.length * 2; i++) {
-                let diffs = balancedValues.map(val => val < 0 ? 0 : val - average);
+                let diffs = balancedValues.map(val => val < 0 ? -Infinity : val - globalAverage);
                 let maxIdx = diffs.indexOf(Math.max(...diffs));
                 let minIdx = diffs.indexOf(Math.min(...diffs));
-                if (balancedValues[maxIdx] <= Math.ceil(average) || balancedValues[minIdx] >= Math.floor(average) || maxIdx === minIdx) break;
+
+                if (balancedValues[maxIdx] <= Math.ceil(globalAverage) || balancedValues[minIdx] >= Math.floor(globalAverage) || maxIdx === minIdx) {
+                    break; // Globally balanced
+                }
+                
                 balancedValues[maxIdx]--;
                 balancedValues[minIdx]++;
                 rawSwaps.push({ from: labels[maxIdx], to: labels[minIdx] });
             }
+
+            // Aggregate swaps and display results
             const aggregatedSwaps = new Map();
             rawSwaps.forEach(swap => {
                 const key = `${swap.from}|${swap.to}`;
@@ -298,7 +355,7 @@
             });
             const resultsDiv = document.getElementById('balancingResults');
             resultsDiv.style.display = 'block';
-            let suggestionsHTML = `<h3>Proposte di Bilanciamento per "${title}"</h3><p>Media Personale/Giorno: <b>${average.toFixed(2)}</b>. Clicca un suggerimento per pre-compilare le date nell'assistente.</p>`;
+            let suggestionsHTML = `<h3>Proposte di Bilanciamento per "${title}"</h3><p>Media Personale/Giorno Globale: <b>${globalAverage.toFixed(2)}</b>. Clicca un suggerimento per pre-compilare le date nell'assistente.</p>`;
             if (aggregatedSwaps.size > 0) {
                 const proposalsArray = Array.from(aggregatedSwaps, ([key, count]) => {
                     const [from, to] = key.split('|');
@@ -307,7 +364,6 @@
                 proposalsArray.sort((a, b) => convertDateToISO(a.from).localeCompare(convertDateToISO(b.from)));
                 suggestionsHTML += '<ul>';
                 proposalsArray.forEach(proposal => {
-                    // MODIFICA: La funzione selectSwapDates ora aggiunge un nuovo blocco
                     suggestionsHTML += `<li onclick="selectSwapDates('${convertDateToISO(proposal.to)}', '${convertDateToISO(proposal.from)}')">Sposta <b>${proposal.count}</b> ${proposal.count > 1 ? 'persone' : 'persona'} dal <b>${proposal.from}</b> al <b>${proposal.to}</b></li>`;
                 });
                 suggestionsHTML += '</ul>';
@@ -322,9 +378,8 @@
             renderSingleCalendar('calendarBalanced', "Situazione Post-Bilanciamento", labels, balancedValues);
         }
         
-        // MODIFICA: Questa funzione ora aggiunge una nuova proposta e la compila
         function selectSwapDates(isoToDate, isoFromDate) {
-            const proposalId = addProposalBlock(); // Aggiunge un nuovo blocco e ottiene il suo ID
+            const proposalId = addProposalBlock(); 
             const proposal = proposals.find(p => p.id === proposalId);
             if (proposal) {
                 proposal.shortageDate = isoToDate;
@@ -350,7 +405,7 @@
             myChart = new Chart(ctx, { type: 'line', data: { labels, datasets }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top' }, title: { display: true, text: title, font: { size: 18 } } } } });
         }
         
-        // --- NUOVE FUNZIONI PER GESTIONE PROPOSTE MULTIPLE ---
+        // --- FUNZIONI PER GESTIONE PROPOSTE MULTIPLE ---
         function addProposalBlock(prefill = {}) {
             proposalCounter++;
             const id = proposalCounter;
@@ -416,12 +471,11 @@
             }
         }
         
-        // MODIFICATA: gestisce ID e numero di lista
         function processList(id, listNumber) {
             const proposal = proposals.find(p => p.id === id);
             if (!proposal) return;
 
-            updateProposalData(id); // Assicura che i dati siano aggiornati
+            updateProposalData(id); 
             const text = (listNumber === 1) ? proposal.freeStaffList : proposal.reserveStaffList;
             if (!text) { alert(`La Lista ${listNumber} nella Proposta #${id} è vuota.`); return; }
             
@@ -463,7 +517,6 @@
             parsedListContainer.innerHTML = html;
         }
 
-        // INVARIATA: Logica di parsing del testo
         function parseEmployeeList(text) {
             const employees = [];
             const lines = text.split('\n').filter(line => line.trim() !== '');
@@ -484,25 +537,22 @@
             return employees;
         }
         
-        // NUOVA LOGICA CENTRALE: Analizza tutte le proposte e aggrega le email
         function findAllSwapsAndGenerateEmails() {
             const resultsDiv = document.getElementById('swapResults');
             resultsDiv.style.display = 'block';
             resultsDiv.innerHTML = '';
-            updateAllProposalsData(); // Salva tutti i dati delle textarea prima di processare
+            updateAllProposalsData();
 
-            // Mappa per aggregare: Key -> employeeId, Value -> { name, swaps: [...] }
             const consolidatedSwaps = new Map();
-
             let hasUnprocessedLists = false;
 
             for (const proposal of proposals) {
                 if (!proposal.isFreeProcessed || !proposal.isReserveProcessed) {
                     hasUnprocessedLists = true;
-                    continue; // Salta questa proposta se le liste non sono state elaborate
+                    continue; 
                 }
                 if (!proposal.shortageDate || !proposal.surplusDate) {
-                    continue; // Salta se le date non sono impostate
+                    continue;
                 }
 
                 const idsInReserveList = new Set(proposal.processedReserveStaff.map(emp => emp.id));
@@ -538,19 +588,17 @@
                 consolidatedSwaps.forEach(employeeData => {
                     const monthObj = new Date(employeeData.swaps[0].dateToWork);
                     const monthName = monthObj.toLocaleString('it-IT', { month: 'long' });
+                    const primoNome = employeeData.name.split(' ')[1];
 
-                   const primoNome = employeeData.name.split(' ')[1];
-
-  // 2. Usa 'primoNome' nel saluto invece di 'employeeData.name'
-  let body = `Buongiorno ${primoNome},\n\n` +
-             `Stiamo allestendo la distribuzione di ${monthName} e, per poter ottimizzare la pianificazione fino a fine anno, vorremmo chiederti se potessi effettuare i seguenti cambi di turni:\n\n`;
-  
+                    let body = `Buongiorno ${primoNome},\n\n` +
+                             `Stiamo allestendo la distribuzione di ${monthName} e, per poter ottimizzare la pianificazione fino a fine anno, vorremmo chiederti se potessi effettuare i seguenti cambi di turni:\n\n`;
+    
 
                     employeeData.swaps.forEach((swap, index) => {
-                         const dateObjToWork = new Date(swap.dateToWork);
-                         const dateObjToFree = new Date(swap.dateToFree);
-                         const formattedDateToWork = dateObjToWork.toLocaleDateString('it-IT', { day: 'numeric', month: 'long' });
-                         const formattedDateToFree = dateObjToFree.toLocaleDateString('it-IT', { day: 'numeric', month: 'long' });
+                        const dateObjToWork = new Date(swap.dateToWork);
+                        const dateObjToFree = new Date(swap.dateToFree);
+                        const formattedDateToWork = dateObjToWork.toLocaleDateString('it-IT', { day: 'numeric', month: 'long' });
+                        const formattedDateToFree = dateObjToFree.toLocaleDateString('it-IT', { day: 'numeric', month: 'long' });
                         
                         body += `- Proposta #${index + 1}: Fare libero il ${formattedDateToFree} in cambio di lavorare il giorno ${formattedDateToWork}\n`;
                     });
@@ -567,7 +615,7 @@
                 });
 
                 html += '</ul>';
-                resultsDiv.innerHTML += html; // Usa += per aggiungere dopo l'eventuale messaggio di errore
+                resultsDiv.innerHTML += html; 
             } else if (!hasUnprocessedLists) {
                 resultsDiv.innerHTML = '<h4 style="text-align: center;">Nessun collaboratore in comune trovato per le proposte definite.</h4>';
             }
