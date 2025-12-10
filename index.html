@@ -136,7 +136,9 @@
 
     <div class="container" id="swapHelper">
         <h2>Assistente Scambio Turni 🛠️</h2>
-        <p>Aggiungi una o più proposte di scambio. La logica controllerà che il personale di riserva abbia almeno <strong>12 ore di riposo</strong> tra la fine del turno precedente e l'inizio del nuovo.</p>
+        <p>Aggiungi una o più proposte di scambio. 
+           <br><strong>Regola Lista 1 (Libero):</strong> Vengono esclusi collaboratori che hanno orari nella riga (non totalmente liberi).
+           <br><strong>Regola Lista 2 (Riserva):</strong> Vengono esclusi collaboratori con meno di 12 ore di riposo.</p>
         
         <div id="proposals-container"></div>
 
@@ -278,14 +280,13 @@
         }
 
         function balancePersonnel() {
-            // Funzione semplificata di bilanciamento per completezza
+            // Funzione semplificata di bilanciamento
             const values = [...originalData.values];
             const labels = [...originalData.labels];
             const validValues = values.filter(v => v >= 0);
             if(validValues.length === 0) return;
             const avg = Math.round(validValues.reduce((a,b)=>a+b,0)/validValues.length);
             
-            // Mock visuale: livella tutto alla media
             const balancedValues = values.map(v => v < 0 ? v : avg);
             
             document.getElementById('balancedCalendarContainer').style.display = 'block';
@@ -329,15 +330,15 @@
                         <label for="date1-${id}">1. Giorno con CARENZA di personale:</label>
                         <input type="date" id="date1-${id}" value="${newProposal.shortageDate}" onchange="updateProposalData(${id})">
                         <label for="list1-${id}" style="margin-top: 1rem;">2. Incolla qui la lista del personale LIBERO:</label>
-                        <textarea id="list1-${id}" placeholder="Es: Rossi Mario 123456" onchange="updateProposalData(${id})"></textarea>
-                        <button onclick="processList(${id}, 1)">Elabora Lista 1</button>
+                        <textarea id="list1-${id}" placeholder="Incolla lista..." onchange="updateProposalData(${id})"></textarea>
+                        <button onclick="processList(${id}, 1)">Elabora Lista 1 (Strict Free)</button>
                         <div class="parsed-list-container" id="parsedList1-${id}"></div>
                     </div>
                     <div class="swap-area-col">
                         <label for="date2-${id}">1. Giorno con ESUBERO di personale:</label>
                         <input type="date" id="date2-${id}" value="${newProposal.surplusDate}" onchange="updateProposalData(${id})">
                         <label for="list2-${id}" style="margin-top: 1rem;">2. Incolla qui la lista del personale DI RISERVA:</label>
-                        <textarea id="list2-${id}" placeholder="Es: Bianchi Luca 654321 ... 17:10 04:38" onchange="updateProposalData(${id})"></textarea>
+                        <textarea id="list2-${id}" placeholder="Incolla lista..." onchange="updateProposalData(${id})"></textarea>
                         <button onclick="processList(${id}, 2)">Elabora Lista 2 (Controllo 12h)</button>
                         <div class="parsed-list-container" id="parsedList2-${id}"></div>
                     </div>
@@ -373,9 +374,13 @@
             
             const parsedListContainer = document.getElementById(`parsedList${listNumber}-${id}`);
             
-            // Attiva il controllo 12 ore SOLO per la Lista 2 (Riserva)
+            // CONFIGURAZIONE REGOLE:
+            // Lista 1 (Libero): strictFree = true. Se ha orari, viene SCARTATO.
+            const strictFree = (listNumber === 1);
+            // Lista 2 (Riserva): checkRestRule = true. Se ha orari, controlla che ci siano 12 ore di pausa.
             const checkRest = (listNumber === 2);
-            const processedData = parseEmployeeList(text, checkRest);
+
+            const processedData = parseEmployeeList(text, checkRest, strictFree);
             
             if (listNumber === 1) { 
                 proposal.processedFreeStaff = processedData; 
@@ -387,7 +392,8 @@
 
             if (processedData.length === 0) {
                 let msg = "Nessun collaboratore valido trovato.";
-                if (checkRest) msg += " (Nessuno rispetta le 12h di riposo o formato dati non riconosciuto)";
+                if (strictFree) msg += " (Scartati collaboratori con orari presenti)";
+                if (checkRest) msg += " (Scartati collaboratori senza 12h di riposo)";
                 parsedListContainer.innerHTML = `<p>${msg}</p>`; return;
             }
 
@@ -424,11 +430,10 @@
             parsedListContainer.innerHTML = html;
         }
 
-        // --- FUNZIONE DI PARSING CORRETTA (Logica: Default SI, se <12h NO) ---
-        function parseEmployeeList(text, checkRestRule = false) {
+        // --- FUNZIONE DI PARSING (Doppia Logica: StrictFree & 12hRule) ---
+        function parseEmployeeList(text, checkRestRule = false, excludeIfHasTimes = false) {
             const employees = [];
             const lines = text.split('\n').filter(line => line.trim() !== '');
-            // Regex per trovare la matricola (6 cifre)
             const idRegex = /\b(\d{6})\b/;
 
             lines.forEach(line => {
@@ -437,7 +442,7 @@
                 if (matchId) {
                     const id = matchId[1];
                     
-                    // Estrazione Nome (euristica: prende le parole prima della matricola)
+                    // Estrazione Nome
                     const parts = line.substring(0, matchId.index).split(/\s+/).filter(p => p);
                     let name = "Nome sconosciuto";
                     if (parts.length >= 2) name = parts.slice(-2).join(' ');
@@ -449,31 +454,34 @@
                     if (lowerLine.includes('früh') || lowerLine.includes('presto')) shiftType = 'Presto';
                     else if (lowerLine.includes('spät') || lowerLine.includes('tardi')) shiftType = 'Tardi';
 
-                    // --- LOGICA 12 ORE ---
-                    let isEligible = true; // DEFAULT: IL COLLABORATORE VIENE PRESO
+                    let isEligible = true; // Default SI
                     let restGapStr = "";
 
-                    if (checkRestRule) {
-                        // Cerca TUTTI gli orari nel formato HH:MM nella riga
-                        // Usiamo matchAll per trovarli anche se sono separati da molto spazio o tabulazioni
-                        const allTimes = [...line.matchAll(/(\d{1,2}:\d{2})/g)].map(m => m[1]);
-                        
-                        // Se troviamo almeno 2 orari, facciamo il calcolo
+                    // Cerca tutti gli orari (formato HH:MM)
+                    const allTimes = [...line.matchAll(/(\d{1,2}:\d{2})/g)].map(m => m[1]);
+
+                    // --- LOGICA LISTA 1 (PERSONALE LIBERO) ---
+                    if (excludeIfHasTimes) {
+                        // Se ci sono orari (almeno 2), significa che non è libero al 100% -> SCARTARE
                         if (allTimes.length >= 2) {
-                            // Prendiamo i primi due trovati per sicurezza su questa riga specifica
-                            // Solitamente: Fine Ieri e Inizio Domani
+                            isEligible = false;
+                        }
+                    }
+
+                    // --- LOGICA LISTA 2 (RISERVA - 12 ORE) ---
+                    else if (checkRestRule) {
+                        // Se ci sono orari, controlla la pausa
+                        if (allTimes.length >= 2) {
                             const prevEndTime = allTimes[0]; // es. 17:10
                             const nextStartTime = allTimes[1]; // es. 04:38
 
                             const [h1, m1] = prevEndTime.split(':').map(Number);
                             const [h2, m2] = nextStartTime.split(':').map(Number);
 
-                            const min1 = h1 * 60 + m1; // Minuti fine turno precedente
-                            const min2 = h2 * 60 + m2; // Minuti inizio nuovo turno
+                            const min1 = h1 * 60 + m1; 
+                            const min2 = h2 * 60 + m2; 
 
-                            // Calcolo differenza. 
-                            // Se l'orario di inizio è più piccolo di quello di fine (es. 04:38 < 17:10),
-                            // significa che è il giorno dopo (+1440 minuti).
+                            // Se inizio (min2) < fine (min1), siamo nel giorno dopo (+1440 min)
                             let minutes2Adjusted = min2;
                             if (min2 < min1) {
                                 minutes2Adjusted += 1440; 
@@ -481,18 +489,16 @@
 
                             const diffMinutes = minutes2Adjusted - min1;
                             
-                            // SE LA DIFFERENZA E' INFERIORE A 720 MINUTI (12 ORE) -> SCARTARE
+                            // Se < 720 minuti (12h) -> SCARTARE
                             if (diffMinutes < 720) {
-                                isEligible = false; // VIENE ESCLUSO
+                                isEligible = false; 
                             } else {
-                                // Se ha più di 12 ore, salviamo l'info per visualizzarla
                                 const h = Math.floor(diffMinutes / 60);
                                 const m = diffMinutes % 60;
                                 restGapStr = `${h}h ${m}m`;
                             }
                         } 
-                        // SE NON CI SONO ORARI (allTimes.length < 2), isEligible RIMANE TRUE.
-                        // "per i collaboratori che non hanno orario vanno presi tutti"
+                        // Se NON ci sono orari, rimane isEligible = true (default)
                     }
 
                     if (isEligible) {
@@ -508,7 +514,6 @@
             resultsDiv.style.display = 'block';
             resultsDiv.innerHTML = '';
             
-            // Aggiorna i dati dai campi di input
             proposals.forEach(p => updateProposalData(p.id));
 
             const consolidatedSwaps = new Map();
@@ -521,7 +526,6 @@
                 }
                 if (!proposal.shortageDate || !proposal.surplusDate) continue;
 
-                // Trova corrispondenze per ID
                 const idsInReserveList = new Set(proposal.processedReserveStaff.map(emp => emp.id));
                 const commonEmployees = proposal.processedFreeStaff.filter(emp => idsInReserveList.has(emp.id));
 
@@ -554,7 +558,6 @@
                 consolidatedSwaps.forEach(employeeData => {
                     const monthObj = new Date(employeeData.swaps[0].dateToWork);
                     const monthName = monthObj.toLocaleString('it-IT', { month: 'long' });
-                    // Cerca di estrarre il nome proprio
                     const primoNome = employeeData.name.split(' ')[1] || employeeData.name.split(' ')[0];
 
                     let body = `Buongiorno ${primoNome},\n\n` +
