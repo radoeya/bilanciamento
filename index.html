@@ -131,6 +131,7 @@
                     <div id="calendarBalanced" class="calendar-instance"></div>
                 </div>
             </div>
+            
             <div id="balancingResults" style="display: none;"></div>
         </div>
     </div>
@@ -173,19 +174,15 @@
             const strVal = String(value).trim();
 
             // CASO B: Stringa (File CSV o Testo: "10.01.2026")
-            // Cerca pattern con separatori . / o -
             const parts = strVal.split(/[\.\/-]/);
 
             if (parts.length === 3) {
-                // Se i numeri sono grandi (es. 2026-01-10), gestisci formato ISO inverso che talvolta capita
+                // Se i numeri sono grandi (es. 2026-01-10), gestisci formato ISO inverso
                 if (parts[0].length === 4) {
                      return `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
                 }
 
-                // ALTRIMENTI: LOGICA EUROPEA FORZATA
-                // Indice 0 = GIORNO (es. 10)
-                // Indice 1 = MESE (es. 01)
-                // Indice 2 = ANNO (es. 2026)
+                // ALTRIMENTI: LOGICA EUROPEA FORZATA (GG.MM.AAAA)
                 let d = parts[0];
                 let m = parts[1];
                 let y = parts[2];
@@ -226,7 +223,7 @@
 
             const data = await fileInput.files[0].arrayBuffer();
             
-            // MODIFICA FONDAMENTALE 1: cellDates: false
+            // Leggiamo il file
             const workbook = XLSX.read(data, {
                 type: 'array',
                 cellDates: false 
@@ -234,9 +231,7 @@
             
             const worksheet = workbook.Sheets[workbook.SheetNames[0]];
             
-            // MODIFICA FONDAMENTALE 2: raw: false
-            // raw: false costringe la libreria a darci il TESTO (es "10.01.2026")
-            // invece di provare a convertirlo in data americana.
+            // raw: false costringe la libreria a darci il TESTO
             const matrix = XLSX.utils.sheet_to_json(worksheet, { 
                 header: 1, 
                 defval: null,
@@ -249,7 +244,6 @@
             
             for (let i = 0; i < matrix.length; i++) {
                 const row = matrix[i];
-                // Cerca una cella che contenga "data" (case insensitive)
                 const foundIndex = row.findIndex(cell => cell && String(cell).trim().toLowerCase().includes('data'));
                 if (foundIndex !== -1) {
                     headerRowIndex = i;
@@ -287,12 +281,9 @@
                     
                     availableColumns.forEach(col => {
                         let val = row[col.index];
-                        // Pulizia numeri (virgola -> punto)
                         if (typeof val === 'string') val = val.replace(',', '.');
                         val = parseFloat(val);
-                        // Se non è un numero valido, metti 0
                         const finalVal = (isNaN(val)) ? 0 : val;
-                        
                         rowObj[col.name] = finalVal;
                         rowHTML += `<td>${finalVal}</td>`;
                     });
@@ -349,7 +340,6 @@
             const titleEl = document.getElementById(elementId.replace('calendar', 'calendarTitle'));
             if(titleEl) titleEl.textContent = title;
             
-            // Imposta la data iniziale in base ai dati caricati
             let firstDate = labels[0] || new Date().toISOString().split('T')[0];
             
             const events = labels.map((dateISO, index) => {
@@ -409,22 +399,84 @@
             });
         }
 
+        // --- NUOVA LOGICA BILANCIAMENTO CON SUGGERIMENTI ---
         function balancePersonnel() {
             const values = [...originalData.values];
-            const labels = [...originalData.labels];
+            const labels = [...originalData.labels]; // Le date ISO
+            
+            // 1. Calcolo del Target (Media Arrotondata)
             const validValues = values.filter(v => v >= 0);
             if(validValues.length === 0) return;
-            const avg = Math.round(validValues.reduce((a,b)=>a+b,0)/validValues.length);
             
-            const balancedValues = values.map(v => v < 0 ? v : avg);
+            const total = validValues.reduce((a,b)=>a+b,0);
+            const avg = Math.round(total / validValues.length);
             
+            // 2. Simuliamo il calendario "Ideale"
+            const balancedValues = values.map(v => (v >= 0 && v < avg) ? avg : v);
+
+            // 3. Visualizza il Calendario Bilanciato
             document.getElementById('balancedCalendarContainer').style.display = 'block';
             document.getElementById('calendarsWrapper').style.gridTemplateColumns = '1fr 1fr';
-            renderSingleCalendar('calendarBalanced', "Situazione Ideale (Simulata)", labels, balancedValues);
+            renderSingleCalendar('calendarBalanced', `Situazione Obiettivo (Media: ${avg})`, labels, balancedValues);
             
+            // 4. LOGICA SUGGERIMENTI SPOSTAMENTI
             const resultsDiv = document.getElementById('balancingResults');
             resultsDiv.style.display = 'block';
-            resultsDiv.innerHTML = `<p>Simulazione: L'organico medio ideale è di circa <b>${avg}</b> persone al giorno.</p>`;
+            
+            let html = `<h3>💡 Suggerimenti per il Bilanciamento</h3>
+                        <p>L'organico medio ideale è di <b>${avg}</b> persone. Ecco come potresti ottimizzare:</p>
+                        <ul>`;
+
+            let shortages = []; // Giorni con carenza
+            let surpluses = []; // Giorni con esubero
+
+            values.forEach((val, idx) => {
+                if (val < 0) return;
+                const diff = val - avg;
+                if (diff < 0) {
+                    shortages.push({ index: idx, date: labels[idx], missing: Math.abs(diff) });
+                } else if (diff > 0) {
+                    surpluses.push({ index: idx, date: labels[idx], available: diff });
+                }
+            });
+
+            let suggestionsCount = 0;
+
+            shortages.forEach(shortage => {
+                if (shortage.missing <= 0) return;
+
+                // Cerca un esubero disponibile
+                for (let surplus of surpluses) {
+                    if (surplus.available <= 0) continue;
+                    if (shortage.missing <= 0) break;
+
+                    const amountToMove = Math.min(shortage.missing, surplus.available);
+                    
+                    const dateFrom = new Date(surplus.date).toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit' });
+                    const dateTo = new Date(shortage.date).toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit' });
+
+                    html += `<li>
+                                🔄 <b>Sposta ${amountToMove}</b> pers. dal <b>${dateFrom}</b> (ne ha in più) 
+                                al <b>${dateTo}</b> (ne mancano).
+                             </li>`;
+                    
+                    surplus.available -= amountToMove;
+                    shortage.missing -= amountToMove;
+                    suggestionsCount++;
+                }
+            });
+
+            if (suggestionsCount === 0) {
+                html += `<li>✅ Nessun spostamento necessario, l'organico è già equilibrato rispetto alla media!</li>`;
+            } else {
+                const remainingShortages = shortages.filter(s => s.missing > 0);
+                if (remainingShortages.length > 0) {
+                     html += `<li style="margin-top:10px; color: #d9534f;">⚠️ Attenzione: Rimangono ancora dei giorni scoperti anche usando tutti gli esuberi disponibili.</li>`;
+                }
+            }
+
+            html += `</ul>`;
+            resultsDiv.innerHTML = html;
         }
 
         // --- 2. Funzioni Assistente Scambio Turni (INVARIATO) ---
