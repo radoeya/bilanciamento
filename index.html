@@ -64,7 +64,7 @@
         #dashboard { display: flex; flex-direction: column; gap: 2rem; width: 100%; margin-top: 1rem; }
         #chartContainer { height: 400px; width: 100%; }
         #calendarsWrapper { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; }
-        .calendar-container { height: 600px; } /* Aumentata altezza per visibilità */
+        .calendar-container { height: 600px; } 
         .calendar-container h3 { text-align: center; margin-top: 0; margin-bottom: 10px; }
         .calendar-instance { height: calc(100% - 30px); }
 
@@ -137,7 +137,7 @@
 
     <div class="container" id="tableContainer" style="display: none;">
         <h2>Verifica Dati Importati</h2>
-        <p style="font-size: 0.9rem; color: #666;">Controlla qui che le date corrispondano esattamente al tuo file Excel.</p>
+        <p style="font-size: 0.9rem; color: #666;">Se le date qui sotto sono corrette (es. 2026-01-10 per il 10 Gennaio), allora il grafico sarà corretto.</p>
         <table id="dataTable"></table>
     </div>
 
@@ -158,28 +158,19 @@
     <script>
         // --- Variabili Globali ---
         let myChart = null, calendarOriginal = null, calendarBalanced = null;
-        let jsonData = []; // Conterrà i dati puliti: [{_dateISO: "YYYY-MM-DD", Chiasso: 5}, ...]
-        let availableColumns = []; // Lista delle colonne valori
+        let jsonData = []; 
+        let availableColumns = []; 
         let originalData = {};
         let proposals = []; 
         let proposalCounter = 0; 
 
-        // --- 1. Funzioni Gestione Excel (CORRETTE PER DATE) ---
+        // --- 1. Funzioni Gestione Excel/CSV (LOGICA EUROPEA FORZATA) ---
 
-        // Funzione Helper Robusta per le Date
         function parseExcelDate(value) {
             if (!value) return null;
 
-            // 1. Se SheetJS ci passa già un oggetto DATA
-            if (value instanceof Date) {
-                // Usiamo i metodi locali per evitare slittamenti di fuso orario
-                const y = value.getFullYear();
-                const m = String(value.getMonth() + 1).padStart(2, '0');
-                const d = String(value.getDate()).padStart(2, '0');
-                return `${y}-${m}-${d}`;
-            }
-
-            // 2. Se è un NUMERO (es. 45300) - Fallback manuale
+            // CASO A: Numero (File Excel standard .xlsx)
+            // Excel salva le date come numeri (es. 45300)
             if (typeof value === 'number') {
                 const date = new Date(1899, 11, 30);
                 date.setDate(date.getDate() + Math.round(value));
@@ -189,18 +180,36 @@
                 return `${y}-${m}-${d}`;
             }
 
-            // 3. Se è una STRINGA (es. "10.01.2026") - FORZIAMO FORMATO EUROPEO
+            // CASO B: Stringa (File CSV o Testo: "10.01.2026")
+            // Qui risolviamo il problema del 10 Ottobre vs 10 Gennaio
             if (typeof value === 'string') {
+                // Prendi solo la prima parte prima di eventuali orari
                 let datePart = value.trim().split(' ')[0];
-                // Cerca pattern: cifre separate da . / o -
-                const parts = datePart.match(/^(\d{1,2})[\.\/-](\d{1,2})[\.\/-](\d{4})$/);
                 
-                if (parts) {
-                    // FORZATURA: Il primo numero è SEMPRE il Giorno, il secondo il Mese
-                    return `${parts[3]}-${parts[2].padStart(2, '0')}-${parts[1].padStart(2, '0')}`;
+                // Dividi per punto, slash o trattino
+                // "10.01.2026" diventa ["10", "01", "2026"]
+                const parts = datePart.split(/[\.\/-]/);
+
+                if (parts.length === 3) {
+                    // ASSEGNAZIONE FORZATA: 
+                    // Indice 0 = GIORNO
+                    // Indice 1 = MESE
+                    // Indice 2 = ANNO
+                    let d = parts[0];
+                    let m = parts[1];
+                    let y = parts[2];
+
+                    // Correzione anno a 2 cifre (es. "26" -> "2026")
+                    if (y.length === 2) y = "20" + y;
+
+                    // Aggiungi zeri se servono (es. 1 -> 01)
+                    m = m.padStart(2, '0');
+                    d = d.padStart(2, '0');
+
+                    // Restituisci formato ISO standard (YYYY-MM-DD)
+                    return `${y}-${m}-${d}`;
                 }
             }
-
             return null;
         }
 
@@ -218,23 +227,24 @@
 
             const data = await fileInput.files[0].arrayBuffer();
             
-            // IMPORTANTE: cellDates: true dice alla libreria di interpretare le date
+            // MODIFICA FONDAMENTALE: cellDates: false
+            // Leggiamo tutto come testo grezzo. Impedisce a Excel di indovinare (e sbagliare) tra Mese/Giorno.
             const workbook = XLSX.read(data, {
                 type: 'array',
-                cellDates: true, 
-                dateNF: 'dd/mm/yyyy' 
+                cellDates: false 
             });
             
             const worksheet = workbook.Sheets[workbook.SheetNames[0]];
             const matrix = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: null });
             
-            // 1. Trova Intestazione
+            // 1. Trova Intestazione "Data"
             let headerRowIndex = -1;
             let dateColIndex = -1;
             
             for (let i = 0; i < matrix.length; i++) {
                 const row = matrix[i];
-                const foundIndex = row.findIndex(cell => cell && String(cell).trim().toLowerCase() === 'data');
+                // Cerca una cella che contenga "data" (case insensitive)
+                const foundIndex = row.findIndex(cell => cell && String(cell).trim().toLowerCase().includes('data'));
                 if (foundIndex !== -1) {
                     headerRowIndex = i;
                     dateColIndex = foundIndex;
@@ -248,10 +258,11 @@
             }
 
             const headers = matrix[headerRowIndex];
+            // Trova le altre colonne (sedi)
             availableColumns = headers.map((h, idx) => ({ name: h, index: idx }))
                                       .filter(col => col.index !== dateColIndex && col.name != null && String(col.name).trim() !== '');
             
-            // 2. Costruisci dati e Tabella di controllo
+            // 2. Elaborazione Righe
             const tableBody = document.getElementById('dataTable');
             let tableHTML = `<thead><tr><th>Data (ISO)</th>${availableColumns.map(c => `<th>${c.name}</th>`).join('')}</tr></thead><tbody>`;
 
@@ -259,7 +270,9 @@
                 const row = matrix[i];
                 if (!row || row.length === 0) continue;
 
+                // 1. Leggi valore grezzo
                 const dateRaw = row[dateColIndex];
+                // 2. Converti con la NOSTRA logica europea
                 const dateISO = parseExcelDate(dateRaw);
 
                 if (dateISO) {
@@ -268,9 +281,11 @@
                     
                     availableColumns.forEach(col => {
                         let val = row[col.index];
+                        // Pulizia numeri (virgola -> punto)
                         if (typeof val === 'string') val = val.replace(',', '.');
                         val = parseFloat(val);
-                        const finalVal = (isNaN(val) || val < 0) ? 0 : val;
+                        // Se non è un numero valido, metti 0
+                        const finalVal = (isNaN(val)) ? 0 : val;
                         
                         rowObj[col.name] = finalVal;
                         rowHTML += `<td>${finalVal}</td>`;
@@ -328,6 +343,7 @@
             const titleEl = document.getElementById(elementId.replace('calendar', 'calendarTitle'));
             if(titleEl) titleEl.textContent = title;
             
+            // Imposta la data iniziale in base ai dati caricati
             let firstDate = labels[0] || new Date().toISOString().split('T')[0];
             
             const events = labels.map((dateISO, index) => {
