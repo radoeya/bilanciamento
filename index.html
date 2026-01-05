@@ -30,7 +30,7 @@
         h1, h2, h3, h4, h5 { color: var(--primary-color); font-weight: 600; }
         .container {
             background: var(--white-color); padding: 2rem; border-radius: 12px;
-            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1); width: 95%; max-width: 1400px; margin-bottom: 2rem;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1); width: 95%; max-width: 1600px; margin-bottom: 2rem;
         }
         
         /* Dashboard Controls */
@@ -62,7 +62,11 @@
         
         /* Dashboard Views */
         #dashboard { display: flex; flex-direction: column; gap: 2rem; width: 100%; margin-top: 1rem; }
-        #chartContainer { height: 400px; width: 100%; }
+        
+        /* NUOVO: Wrapper per i grafici affiancati */
+        #chartsWrapper { display: grid; grid-template-columns: 1fr; gap: 2rem; width: 100%; height: 400px; transition: all 0.3s ease; }
+        .chart-box { position: relative; width: 100%; height: 100%; }
+        
         #calendarsWrapper { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; }
         .calendar-container { height: 600px; } 
         .calendar-container h3 { text-align: center; margin-top: 0; margin-bottom: 10px; }
@@ -120,7 +124,15 @@
         </div>
         
         <div id="dashboard" style="display: none;">
-            <div id="chartContainer"><canvas id="myChart"></canvas></div>
+            <div id="chartsWrapper">
+                <div class="chart-box">
+                    <canvas id="myChart"></canvas>
+                </div>
+                <div class="chart-box" id="balancedChartBox" style="display:none;">
+                    <canvas id="balancedChart"></canvas>
+                </div>
+            </div>
+
             <div id="calendarsWrapper">
                 <div class="calendar-container" id="originalCalendarContainer">
                     <h3 id="originalCalendarTitle"></h3>
@@ -158,45 +170,34 @@
     
     <script>
         // --- Variabili Globali ---
-        let myChart = null, calendarOriginal = null, calendarBalanced = null;
+        let myChart = null, balancedChart = null; // Aggiunto balancedChart
+        let calendarOriginal = null, calendarBalanced = null;
         let jsonData = []; 
         let availableColumns = []; 
         let originalData = {};
         let proposals = []; 
         let proposalCounter = 0; 
 
-        // --- 1. Funzioni Gestione Excel/CSV (LOGICA EUROPEA FORZATA) ---
+        // --- 1. Funzioni Gestione Excel/CSV ---
 
         function parseExcelDate(value) {
             if (!value) return null;
-
-            // Pulisci il valore e converti in stringa per sicurezza
             const strVal = String(value).trim();
-
-            // CASO B: Stringa (File CSV o Testo: "10.01.2026")
             const parts = strVal.split(/[\.\/-]/);
 
             if (parts.length === 3) {
-                // Se i numeri sono grandi (es. 2026-01-10), gestisci formato ISO inverso
                 if (parts[0].length === 4) {
                      return `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
                 }
-
-                // ALTRIMENTI: LOGICA EUROPEA FORZATA (GG.MM.AAAA)
                 let d = parts[0];
                 let m = parts[1];
                 let y = parts[2];
-
-                // Correzione anno a 2 cifre
                 if (y.length === 2) y = "20" + y;
-
                 m = m.padStart(2, '0');
                 d = d.padStart(2, '0');
-
                 return `${y}-${m}-${d}`;
             }
             
-            // CASO A: Fallback numero seriale (solo per veri file Excel .xlsx, non CSV)
             if (!isNaN(value) && typeof value === 'number') {
                 const date = new Date(1899, 11, 30);
                 date.setDate(date.getDate() + Math.round(value));
@@ -205,7 +206,6 @@
                 const d = String(date.getDate()).padStart(2, '0');
                 return `${y}-${m}-${d}`;
             }
-
             return null;
         }
 
@@ -217,28 +217,19 @@
             jsonData = [];
             availableColumns = [];
             if (myChart) myChart.destroy();
+            if (balancedChart) balancedChart.destroy(); // Distruggi anche il secondo grafico
             if (calendarOriginal) calendarOriginal.destroy();
             if (calendarBalanced) calendarBalanced.destroy();
+            
             document.getElementById('dashboard').style.display = 'none';
+            document.getElementById('balancedChartBox').style.display = 'none'; // Nascondi box grafico 2
+            document.getElementById('chartsWrapper').style.gridTemplateColumns = '1fr'; // Torna a colonna singola
 
             const data = await fileInput.files[0].arrayBuffer();
-            
-            // Leggiamo il file
-            const workbook = XLSX.read(data, {
-                type: 'array',
-                cellDates: false 
-            });
-            
+            const workbook = XLSX.read(data, { type: 'array', cellDates: false });
             const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+            const matrix = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: null, raw: false });
             
-            // raw: false costringe la libreria a darci il TESTO
-            const matrix = XLSX.utils.sheet_to_json(worksheet, { 
-                header: 1, 
-                defval: null,
-                raw: false 
-            });
-            
-            // 1. Trova Intestazione "Data"
             let headerRowIndex = -1;
             let dateColIndex = -1;
             
@@ -253,16 +244,14 @@
             }
             
             if (headerRowIndex === -1) {
-                alert("ERRORE: Impossibile trovare la colonna 'Data'. Assicurati che ci sia un'intestazione chiamata 'Data'.");
+                alert("ERRORE: Impossibile trovare la colonna 'Data'.");
                 return;
             }
 
             const headers = matrix[headerRowIndex];
-            // Trova le altre colonne (sedi)
             availableColumns = headers.map((h, idx) => ({ name: h, index: idx }))
                                       .filter(col => col.index !== dateColIndex && col.name != null && String(col.name).trim() !== '');
             
-            // 2. Elaborazione Righe
             const tableBody = document.getElementById('dataTable');
             let tableHTML = `<thead><tr><th>Data (ISO)</th>${availableColumns.map(c => `<th>${c.name}</th>`).join('')}</tr></thead><tbody>`;
 
@@ -270,9 +259,7 @@
                 const row = matrix[i];
                 if (!row || row.length === 0) continue;
 
-                // 1. Leggi valore grezzo (es. "10.01.2026")
                 const dateRaw = row[dateColIndex];
-                // 2. Converti con la NOSTRA logica europea
                 const dateISO = parseExcelDate(dateRaw);
 
                 if (dateISO) {
@@ -294,11 +281,9 @@
                 }
             }
             tableHTML += `</tbody>`;
-            
             document.getElementById('dataTable').innerHTML = tableHTML;
             document.getElementById('tableContainer').style.display = 'block';
 
-            // 3. Popola Select
             const selector = document.getElementById('rowSelector');
             selector.innerHTML = '<option value="">-- Seleziona una sede --</option>';
             availableColumns.forEach(col => {
@@ -312,15 +297,20 @@
             const selectedColName = selector.value;
             if (!selectedColName) return;
             
+            // Reset visualizzazione bilanciata quando si cambia sede
             document.getElementById('dashboard').style.display = 'flex';
             document.getElementById('balanceBtn').disabled = false;
-            
+            document.getElementById('balancedChartBox').style.display = 'none';
+            document.getElementById('chartsWrapper').style.gridTemplateColumns = '1fr';
+            document.getElementById('balancedCalendarContainer').style.display = 'none';
+            document.getElementById('calendarsWrapper').style.gridTemplateColumns = '1fr';
+            document.getElementById('balancingResults').style.display = 'none';
+
             const labels = jsonData.map(row => row._dateISO);
             const values = jsonData.map(row => row[selectedColName]);
             
             originalData = { labels: labels, values: values, title: selectedColName };
             
-            // Calcolo Media
             const validValues = values.filter(v => v >= 0);
             if (validValues.length > 0) {
                 const total = validValues.reduce((sum, val) => sum + val, 0);
@@ -329,11 +319,13 @@
                 document.getElementById('averageDisplay').style.display = 'block';
             }
 
-            plotChart(originalData.title, originalData.labels, originalData.values);
+            // Plot grafico 1 (Blu)
+            plotChart('myChart', originalData.title + " (Attuale)", originalData.labels, originalData.values, '#1e88e5', 'rgba(30, 136, 229, 0.2)');
+            
             renderSingleCalendar('calendarOriginal', "Effettivo Giornaliero", originalData.labels, originalData.values);
         }
 
-        // --- Funzioni Grafiche Standard (Chart & Calendar) ---
+        // --- Funzioni Grafiche ---
 
         function renderSingleCalendar(elementId, title, labels, values) {
             const container = document.getElementById(elementId);
@@ -349,7 +341,7 @@
                        title: `👤 ${value}`, 
                        start: dateISO, 
                        allDay: true, 
-                       color: value < 0 ? '#dc3545' : '#17a2b8',
+                       color: value < 0 ? '#dc3545' : (elementId.includes('Balanced') ? '#28a745' : '#17a2b8'),
                        textColor: '#fff'
                    };
                 }
@@ -373,18 +365,26 @@
             if (elementId === 'calendarOriginal') calendarOriginal = calendarVar; else calendarBalanced = calendarVar;
         }
 
-        function plotChart(title, labels, values) {
-            const ctx = document.getElementById('myChart').getContext('2d');
-            if (myChart) myChart.destroy();
-            myChart = new Chart(ctx, { 
+        // Funzione Grafico Generica
+        function plotChart(canvasId, title, labels, values, borderColor, bgColor) {
+            const ctx = document.getElementById(canvasId).getContext('2d');
+            
+            // Gestione istanze multiple
+            if (canvasId === 'myChart') {
+                if (myChart) myChart.destroy();
+            } else {
+                if (balancedChart) balancedChart.destroy();
+            }
+
+            const chartInstance = new Chart(ctx, { 
                 type: 'line', 
                 data: { 
                     labels: labels, 
                     datasets: [{ 
                         label: title, 
                         data: values, 
-                        borderColor: '#1e88e5', 
-                        backgroundColor: 'rgba(30, 136, 229, 0.2)', 
+                        borderColor: borderColor, 
+                        backgroundColor: bgColor, 
                         fill: true, 
                         tension: 0.2 
                     }] 
@@ -393,33 +393,48 @@
                     responsive: true, 
                     maintainAspectRatio: false,
                     scales: {
-                        x: { type: 'category', ticks: { maxTicksLimit: 20 } }
+                        x: { type: 'category', ticks: { maxTicksLimit: 20 } },
+                        y: { beginAtZero: true } // Facoltativo: per allineare meglio le scale
                     }
                 } 
             });
+
+            if (canvasId === 'myChart') myChart = chartInstance;
+            else balancedChart = chartInstance;
         }
 
-        // --- NUOVA LOGICA BILANCIAMENTO CON SUGGERIMENTI ---
         function balancePersonnel() {
             const values = [...originalData.values];
-            const labels = [...originalData.labels]; // Le date ISO
+            const labels = [...originalData.labels]; 
             
-            // 1. Calcolo del Target (Media Arrotondata)
             const validValues = values.filter(v => v >= 0);
             if(validValues.length === 0) return;
             
             const total = validValues.reduce((a,b)=>a+b,0);
             const avg = Math.round(total / validValues.length);
             
-            // 2. Simuliamo il calendario "Ideale"
+            // Calcolo valori bilanciati
             const balancedValues = values.map(v => (v >= 0 && v < avg) ? avg : v);
 
-            // 3. Visualizza il Calendario Bilanciato
+            // 1. VISUALIZZA IL SECONDO GRAFICO (VERDE)
+            document.getElementById('balancedChartBox').style.display = 'block';
+            document.getElementById('chartsWrapper').style.gridTemplateColumns = '1fr 1fr';
+            
+            plotChart(
+                'balancedChart', 
+                `Situazione Target (Media: ${avg})`, 
+                labels, 
+                balancedValues, 
+                '#28a745', // Verde
+                'rgba(40, 167, 69, 0.2)'
+            );
+
+            // 2. Visualizza Calendario Bilanciato
             document.getElementById('balancedCalendarContainer').style.display = 'block';
             document.getElementById('calendarsWrapper').style.gridTemplateColumns = '1fr 1fr';
             renderSingleCalendar('calendarBalanced', `Situazione Obiettivo (Media: ${avg})`, labels, balancedValues);
             
-            // 4. LOGICA SUGGERIMENTI SPOSTAMENTI
+            // 3. Logica Suggerimenti
             const resultsDiv = document.getElementById('balancingResults');
             resultsDiv.style.display = 'block';
             
@@ -427,8 +442,8 @@
                         <p>L'organico medio ideale è di <b>${avg}</b> persone. Ecco come potresti ottimizzare:</p>
                         <ul>`;
 
-            let shortages = []; // Giorni con carenza
-            let surpluses = []; // Giorni con esubero
+            let shortages = []; 
+            let surpluses = []; 
 
             values.forEach((val, idx) => {
                 if (val < 0) return;
@@ -444,8 +459,6 @@
 
             shortages.forEach(shortage => {
                 if (shortage.missing <= 0) return;
-
-                // Cerca un esubero disponibile
                 for (let surplus of surpluses) {
                     if (surplus.available <= 0) continue;
                     if (shortage.missing <= 0) break;
@@ -474,12 +487,11 @@
                      html += `<li style="margin-top:10px; color: #d9534f;">⚠️ Attenzione: Rimangono ancora dei giorni scoperti anche usando tutti gli esuberi disponibili.</li>`;
                 }
             }
-
             html += `</ul>`;
             resultsDiv.innerHTML = html;
         }
 
-        // --- 2. Funzioni Assistente Scambio Turni (INVARIATO) ---
+        // --- 2. Funzioni Assistente Scambio Turni ---
 
         function addProposalBlock(prefill = {}) {
             proposalCounter++;
@@ -615,10 +627,8 @@
 
             lines.forEach(line => {
                 const matchId = line.match(idRegex);
-                
                 if (matchId) {
                     const id = matchId[1];
-                    
                     const parts = line.substring(0, matchId.index).split(/\s+/).filter(p => p);
                     let name = "Nome sconosciuto";
                     if (parts.length >= 2) name = parts.slice(-2).join(' ');
@@ -631,45 +641,33 @@
 
                     let isEligible = true;
                     let restGapStr = "";
-
                     const allTimes = [...line.matchAll(/(\d{1,2}:\d{2})/g)].map(m => m[1]);
 
                     if (excludeIfHasTimes) {
-                        if (allTimes.length >= 2) {
-                            isEligible = false;
-                        }
+                        if (allTimes.length >= 2) isEligible = false;
                     }
                     else if (checkRestRule) {
                         if (allTimes.length >= 2) {
                             const prevEndTime = allTimes[0]; 
                             const nextStartTime = allTimes[1]; 
-
                             const [h1, m1] = prevEndTime.split(':').map(Number);
                             const [h2, m2] = nextStartTime.split(':').map(Number);
-
                             const min1 = h1 * 60 + m1; 
                             const min2 = h2 * 60 + m2; 
 
                             let minutes2Adjusted = min2;
-                            if (min2 < min1) {
-                                minutes2Adjusted += 1440; 
-                            }
-
+                            if (min2 < min1) minutes2Adjusted += 1440; 
                             const diffMinutes = minutes2Adjusted - min1;
                             
-                            if (diffMinutes < 720) {
-                                isEligible = false; 
-                            } else {
+                            if (diffMinutes < 720) isEligible = false; 
+                            else {
                                 const h = Math.floor(diffMinutes / 60);
                                 const m = diffMinutes % 60;
                                 restGapStr = `${h}h ${m}m`;
                             }
                         } 
                     }
-
-                    if (isEligible) {
-                        employees.push({ id, name, shiftType, restGap: restGapStr });
-                    }
+                    if (isEligible) employees.push({ id, name, shiftType, restGap: restGapStr });
                 }
             });
             return employees;
@@ -679,9 +677,7 @@
             const resultsDiv = document.getElementById('swapResults');
             resultsDiv.style.display = 'block';
             resultsDiv.innerHTML = '';
-            
             proposals.forEach(p => updateProposalData(p.id));
-
             const consolidatedSwaps = new Map();
             let hasUnprocessedLists = false;
 
@@ -702,7 +698,6 @@
                         dateToWork: proposal.shortageDate,
                         dateToFree: proposal.surplusDate
                     };
-
                     if (consolidatedSwaps.has(emp.id)) {
                         consolidatedSwaps.get(emp.id).swaps.push(swapInfo);
                     } else {
@@ -725,18 +720,14 @@
                     const monthObj = new Date(employeeData.swaps[0].dateToWork);
                     const monthName = monthObj.toLocaleString('it-IT', { month: 'long' });
                     const primoNome = employeeData.name.split(' ')[1] || employeeData.name.split(' ')[0];
-
                     let body = `Buongiorno ${primoNome},\n\n` +
                              `Stiamo allestendo la distribuzione di ${monthName} e, per poter ottimizzare la pianificazione fino a fine anno, vorremmo chiederti se potessi effettuare i seguenti cambi di turni:\n\n`;
-
                     employeeData.swaps.forEach((swap, index) => {
                         const dWork = new Date(swap.dateToWork).toLocaleDateString('it-IT', { day: 'numeric', month: 'long' });
                         const dFree = new Date(swap.dateToFree).toLocaleDateString('it-IT', { day: 'numeric', month: 'long' });
                         body += `- Proposta #${index + 1}: Fare libero il ${dFree} in cambio di lavorare il giorno ${dWork}\n`;
                     });
-
                     body += `\nGrazie mille per farci sapere (puoi rispondere direttamente a questa mail).\n\nBuona giornata\n\nSaluti\nRipartizione del Personale \nP-O-BP-ZFR-MSD-EIN\nFerrovie Federali Svizzere – FFS\nProduzione ferroviaria – Condotta dei treni e manovra\n6500 Bellinzona`;
-
                     const subject = `Proposta cambio turni - ${employeeData.name}`;
                     const mailtoLink = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
                     
