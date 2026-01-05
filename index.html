@@ -64,7 +64,7 @@
         #dashboard { display: flex; flex-direction: column; gap: 2rem; width: 100%; margin-top: 1rem; }
         #chartContainer { height: 400px; width: 100%; }
         #calendarsWrapper { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; }
-        .calendar-container { height: 480px; }
+        .calendar-container { height: 600px; } /* Aumentata altezza per visibilità */
         .calendar-container h3 { text-align: center; margin-top: 0; margin-bottom: 10px; }
         .calendar-instance { height: calc(100% - 30px); }
 
@@ -94,10 +94,11 @@
         .parsed-list-container ul { list-style-type: none; padding-left: 5px; margin-top: 5px; }
         
         /* Data Table */
-        #tableContainer { margin-top: 2.5rem; width: 100%; overflow-x: auto; }
+        #tableContainer { margin-top: 2.5rem; width: 100%; overflow-x: auto; display: block; }
         #dataTable { width: 100%; border-collapse: collapse; font-size: 14px; }
         #dataTable caption { caption-side: bottom; text-align: right; font-size: 12px; color: #666; padding-top: 10px; }
         #dataTable th, #dataTable td { border: 1px solid var(--border-color); padding: 10px; text-align: left; white-space: nowrap; }
+        #dataTable th { background-color: #eef7ff; font-weight: 600; }
         hr { border: none; border-top: 1px solid #ccc; margin: 2rem 0; }
         
         @media (max-width: 1200px) { #calendarsWrapper { grid-template-columns: 1fr; } .swap-area { grid-template-columns: 1fr; } }
@@ -134,6 +135,12 @@
         </div>
     </div>
 
+    <div class="container" id="tableContainer" style="display: none;">
+        <h2>Verifica Dati Importati</h2>
+        <p style="font-size: 0.9rem; color: #666;">Controlla qui che le date corrispondano esattamente al tuo file Excel.</p>
+        <table id="dataTable"></table>
+    </div>
+
     <div class="container" id="swapHelper">
         <h2>Assistente Scambio Turni 🛠️</h2>
         <p>Aggiungi una o più proposte di scambio. 
@@ -148,45 +155,52 @@
         <div id="swapResults" style="display: none;"></div>
     </div>
     
-    <div class="container" id="tableContainer" style="display: none;">
-        <h2>Dettaglio Dati Importati</h2>
-        <table id="dataTable"></table>
-    </div>
-
     <script>
         // --- Variabili Globali ---
         let myChart = null, calendarOriginal = null, calendarBalanced = null;
-        let jsonData = []; // Conterrà i dati puliti: [{Data: "YYYY-MM-DD", Chiasso: 5}, ...]
-        let availableColumns = []; // Lista delle colonne valori (es. Chiasso, Lugano)
+        let jsonData = []; // Conterrà i dati puliti: [{_dateISO: "YYYY-MM-DD", Chiasso: 5}, ...]
+        let availableColumns = []; // Lista delle colonne valori
         let originalData = {};
         let proposals = []; 
         let proposalCounter = 0; 
-        const displayLimit = 200;
 
-        // --- 1. Funzioni Gestione Excel (Logica Avanzata per Tabella Verticale) ---
+        // --- 1. Funzioni Gestione Excel (CORRETTE PER DATE) ---
 
-        // Helper: Converte data Excel (numero o stringa) in ISO "YYYY-MM-DD"
+        // Funzione Helper Robusta per le Date
         function parseExcelDate(value) {
             if (!value) return null;
-            
-            // Caso 1: Numero Seriale Excel (es. 45300)
-            if (typeof value === 'number') {
-                const excelEpoch = new Date(1899, 11, 30);
-                const date = new Date(excelEpoch.getTime() + value * 86400000);
-                return date.toISOString().split('T')[0];
+
+            // 1. Se SheetJS ci passa già un oggetto DATA
+            if (value instanceof Date) {
+                // Usiamo i metodi locali per evitare slittamenti di fuso orario
+                const y = value.getFullYear();
+                const m = String(value.getMonth() + 1).padStart(2, '0');
+                const d = String(value.getDate()).padStart(2, '0');
+                return `${y}-${m}-${d}`;
             }
-            
-            // Caso 2: Stringa "GG.MM.AAAA" o "GG/MM/AAAA"
+
+            // 2. Se è un NUMERO (es. 45300) - Fallback manuale
+            if (typeof value === 'number') {
+                const date = new Date(1899, 11, 30);
+                date.setDate(date.getDate() + Math.round(value));
+                const y = date.getFullYear();
+                const m = String(date.getMonth() + 1).padStart(2, '0');
+                const d = String(date.getDate()).padStart(2, '0');
+                return `${y}-${m}-${d}`;
+            }
+
+            // 3. Se è una STRINGA (es. "10.01.2026") - FORZIAMO FORMATO EUROPEO
             if (typeof value === 'string') {
-                // Rimuove eventuali orari o spazi extra
-                let datePart = value.trim().split(' ')[0]; 
+                let datePart = value.trim().split(' ')[0];
+                // Cerca pattern: cifre separate da . / o -
+                const parts = datePart.match(/^(\d{1,2})[\.\/-](\d{1,2})[\.\/-](\d{4})$/);
                 
-                // Gestisce separatori . / -
-                const parts = datePart.match(/(\d{1,2})[\.\/-](\d{1,2})[\.\/-](\d{4})/);
                 if (parts) {
+                    // FORZATURA: Il primo numero è SEMPRE il Giorno, il secondo il Mese
                     return `${parts[3]}-${parts[2].padStart(2, '0')}-${parts[1].padStart(2, '0')}`;
                 }
             }
+
             return null;
         }
 
@@ -194,21 +208,33 @@
             const fileInput = document.getElementById('excelFile');
             if (!fileInput.files[0]) return;
             
+            // RESET
+            jsonData = [];
+            availableColumns = [];
+            if (myChart) myChart.destroy();
+            if (calendarOriginal) calendarOriginal.destroy();
+            if (calendarBalanced) calendarBalanced.destroy();
+            document.getElementById('dashboard').style.display = 'none';
+
             const data = await fileInput.files[0].arrayBuffer();
-            const workbook = XLSX.read(data);
-            const worksheet = workbook.Sheets[workbook.SheetNames[0]];
             
-            // 1. Leggi tutto come matrice (Array di Array)
+            // IMPORTANTE: cellDates: true dice alla libreria di interpretare le date
+            const workbook = XLSX.read(data, {
+                type: 'array',
+                cellDates: true, 
+                dateNF: 'dd/mm/yyyy' 
+            });
+            
+            const worksheet = workbook.Sheets[workbook.SheetNames[0]];
             const matrix = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: null });
             
-            // 2. Trova la riga di intestazione (Cerca "Data" in qualsiasi riga)
+            // 1. Trova Intestazione
             let headerRowIndex = -1;
             let dateColIndex = -1;
             
             for (let i = 0; i < matrix.length; i++) {
                 const row = matrix[i];
-                // Cerca una cella che contenga "data" (case insensitive)
-                const foundIndex = row.findIndex(cell => cell && String(cell).toLowerCase().includes('data'));
+                const foundIndex = row.findIndex(cell => cell && String(cell).trim().toLowerCase() === 'data');
                 if (foundIndex !== -1) {
                     headerRowIndex = i;
                     dateColIndex = foundIndex;
@@ -217,57 +243,56 @@
             }
             
             if (headerRowIndex === -1) {
-                alert("Impossibile trovare una colonna 'Data' nel foglio. Assicurati che ci sia un'intestazione chiamata 'Data'.");
+                alert("ERRORE: Impossibile trovare la colonna 'Data'. Assicurati che ci sia un'intestazione chiamata 'Data'.");
                 return;
             }
 
-            // 3. Estrai le intestazioni
             const headers = matrix[headerRowIndex];
-            
-            // Le colonne disponibili sono tutte quelle diverse da "Data"
             availableColumns = headers.map((h, idx) => ({ name: h, index: idx }))
-                                      .filter(col => col.index !== dateColIndex && col.name != null);
+                                      .filter(col => col.index !== dateColIndex && col.name != null && String(col.name).trim() !== '');
             
-            // 4. Costruisci il jsonData pulito
-            jsonData = [];
+            // 2. Costruisci dati e Tabella di controllo
+            const tableBody = document.getElementById('dataTable');
+            let tableHTML = `<thead><tr><th>Data (ISO)</th>${availableColumns.map(c => `<th>${c.name}</th>`).join('')}</tr></thead><tbody>`;
+
             for (let i = headerRowIndex + 1; i < matrix.length; i++) {
                 const row = matrix[i];
+                if (!row || row.length === 0) continue;
+
                 const dateRaw = row[dateColIndex];
                 const dateISO = parseExcelDate(dateRaw);
-                
+
                 if (dateISO) {
-                    const rowObj = { _dateISO: dateISO, _dateDisplay: dateRaw };
-                    // Aggiungi i valori per ogni colonna trovata
+                    const rowObj = { _dateISO: dateISO };
+                    let rowHTML = `<tr><td>${dateISO}</td>`;
+                    
                     availableColumns.forEach(col => {
                         let val = row[col.index];
-                        // Pulizia numero (gestione virgola/punto)
                         if (typeof val === 'string') val = val.replace(',', '.');
                         val = parseFloat(val);
-                        rowObj[col.name] = (isNaN(val) || val < 0) ? 0 : val;
+                        const finalVal = (isNaN(val) || val < 0) ? 0 : val;
+                        
+                        rowObj[col.name] = finalVal;
+                        rowHTML += `<td>${finalVal}</td>`;
                     });
+                    
+                    rowHTML += `</tr>`;
+                    tableHTML += rowHTML;
                     jsonData.push(rowObj);
                 }
             }
+            tableHTML += `</tbody>`;
+            
+            document.getElementById('dataTable').innerHTML = tableHTML;
+            document.getElementById('tableContainer').style.display = 'block';
 
-            // 5. Popola il selettore
+            // 3. Popola Select
             const selector = document.getElementById('rowSelector');
             selector.innerHTML = '<option value="">-- Seleziona una sede --</option>';
             availableColumns.forEach(col => {
                 selector.appendChild(new Option(col.name, col.name));
             });
-            
             selector.disabled = false;
-            document.getElementById('balanceBtn').disabled = true;
-            
-            // Reset visuale
-            document.getElementById('tableContainer').style.display = 'none';
-            document.getElementById('dashboard').style.display = 'none';
-            document.getElementById('balancingResults').style.display = 'none';
-            document.getElementById('averageDisplay').style.display = 'none';
-            
-            if (myChart) myChart.destroy();
-            if (calendarOriginal) calendarOriginal.destroy();
-            if (calendarBalanced) calendarBalanced.destroy();
         }
 
         function plotSelectedData() {
@@ -278,7 +303,6 @@
             document.getElementById('dashboard').style.display = 'flex';
             document.getElementById('balanceBtn').disabled = false;
             
-            // Estrai i dati per il grafico dalla colonna selezionata
             const labels = jsonData.map(row => row._dateISO);
             const values = jsonData.map(row => row[selectedColName]);
             
@@ -304,19 +328,17 @@
             const titleEl = document.getElementById(elementId.replace('calendar', 'calendarTitle'));
             if(titleEl) titleEl.textContent = title;
             
-            let firstDate = labels[0] || null;
+            let firstDate = labels[0] || new Date().toISOString().split('T')[0];
             
             const events = labels.map((dateISO, index) => {
                 const value = values[index];
-                // Mostra evento anche se valore è 0, ma magari con colore diverso o solo se > 0?
-                // Qui mostriamo se >= 0. Se vuoi nascondere gli 0, metti value > 0
                 if (value !== undefined && value !== null) {
                    return { 
                        title: `👤 ${value}`, 
                        start: dateISO, 
                        allDay: true, 
-                       color: value < 0 ? '#dc3545' : '#17a2b8', // Rosso se negativo (errore), Blu normale
-                       borderColor: '#17a2b8' 
+                       color: value < 0 ? '#dc3545' : '#17a2b8',
+                       textColor: '#fff'
                    };
                 }
                 return null;
@@ -329,9 +351,10 @@
                 initialDate: firstDate, 
                 initialView: 'dayGridMonth', 
                 locale: 'it',
-                headerToolbar: { left: 'prev,next today', center: 'title', right: 'dayGridMonth,timeGridWeek' },
+                headerToolbar: { left: 'prev,next today', center: 'title', right: 'dayGridMonth' },
                 events: events, 
-                height: '100%'
+                height: '100%',
+                contentHeight: 'auto'
             });
             calendarVar.render();
             
