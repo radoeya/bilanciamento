@@ -137,7 +137,7 @@
 
     <div class="container" id="tableContainer" style="display: none;">
         <h2>Verifica Dati Importati</h2>
-        <p style="font-size: 0.9rem; color: #666;">Se le date qui sotto sono corrette (es. 2026-01-10 per il 10 Gennaio), allora il grafico sarà corretto.</p>
+        <p style="font-size: 0.9rem; color: #666;">Controlla che le date qui sotto siano corrette. (Es. 2026-01-10 per il 10 Gennaio).</p>
         <table id="dataTable"></table>
     </div>
 
@@ -169,9 +169,38 @@
         function parseExcelDate(value) {
             if (!value) return null;
 
-            // CASO A: Numero (File Excel standard .xlsx)
-            // Excel salva le date come numeri (es. 45300)
-            if (typeof value === 'number') {
+            // Pulisci il valore e converti in stringa per sicurezza
+            const strVal = String(value).trim();
+
+            // CASO B: Stringa (File CSV o Testo: "10.01.2026")
+            // Cerca pattern con separatori . / o -
+            const parts = strVal.split(/[\.\/-]/);
+
+            if (parts.length === 3) {
+                // Se i numeri sono grandi (es. 2026-01-10), gestisci formato ISO inverso che talvolta capita
+                if (parts[0].length === 4) {
+                     return `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
+                }
+
+                // ALTRIMENTI: LOGICA EUROPEA FORZATA
+                // Indice 0 = GIORNO (es. 10)
+                // Indice 1 = MESE (es. 01)
+                // Indice 2 = ANNO (es. 2026)
+                let d = parts[0];
+                let m = parts[1];
+                let y = parts[2];
+
+                // Correzione anno a 2 cifre
+                if (y.length === 2) y = "20" + y;
+
+                m = m.padStart(2, '0');
+                d = d.padStart(2, '0');
+
+                return `${y}-${m}-${d}`;
+            }
+            
+            // CASO A: Fallback numero seriale (solo per veri file Excel .xlsx, non CSV)
+            if (!isNaN(value) && typeof value === 'number') {
                 const date = new Date(1899, 11, 30);
                 date.setDate(date.getDate() + Math.round(value));
                 const y = date.getFullYear();
@@ -180,36 +209,6 @@
                 return `${y}-${m}-${d}`;
             }
 
-            // CASO B: Stringa (File CSV o Testo: "10.01.2026")
-            // Qui risolviamo il problema del 10 Ottobre vs 10 Gennaio
-            if (typeof value === 'string') {
-                // Prendi solo la prima parte prima di eventuali orari
-                let datePart = value.trim().split(' ')[0];
-                
-                // Dividi per punto, slash o trattino
-                // "10.01.2026" diventa ["10", "01", "2026"]
-                const parts = datePart.split(/[\.\/-]/);
-
-                if (parts.length === 3) {
-                    // ASSEGNAZIONE FORZATA: 
-                    // Indice 0 = GIORNO
-                    // Indice 1 = MESE
-                    // Indice 2 = ANNO
-                    let d = parts[0];
-                    let m = parts[1];
-                    let y = parts[2];
-
-                    // Correzione anno a 2 cifre (es. "26" -> "2026")
-                    if (y.length === 2) y = "20" + y;
-
-                    // Aggiungi zeri se servono (es. 1 -> 01)
-                    m = m.padStart(2, '0');
-                    d = d.padStart(2, '0');
-
-                    // Restituisci formato ISO standard (YYYY-MM-DD)
-                    return `${y}-${m}-${d}`;
-                }
-            }
             return null;
         }
 
@@ -227,15 +226,22 @@
 
             const data = await fileInput.files[0].arrayBuffer();
             
-            // MODIFICA FONDAMENTALE: cellDates: false
-            // Leggiamo tutto come testo grezzo. Impedisce a Excel di indovinare (e sbagliare) tra Mese/Giorno.
+            // MODIFICA FONDAMENTALE 1: cellDates: false
             const workbook = XLSX.read(data, {
                 type: 'array',
                 cellDates: false 
             });
             
             const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-            const matrix = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: null });
+            
+            // MODIFICA FONDAMENTALE 2: raw: false
+            // raw: false costringe la libreria a darci il TESTO (es "10.01.2026")
+            // invece di provare a convertirlo in data americana.
+            const matrix = XLSX.utils.sheet_to_json(worksheet, { 
+                header: 1, 
+                defval: null,
+                raw: false 
+            });
             
             // 1. Trova Intestazione "Data"
             let headerRowIndex = -1;
@@ -270,7 +276,7 @@
                 const row = matrix[i];
                 if (!row || row.length === 0) continue;
 
-                // 1. Leggi valore grezzo
+                // 1. Leggi valore grezzo (es. "10.01.2026")
                 const dateRaw = row[dateColIndex];
                 // 2. Converti con la NOSTRA logica europea
                 const dateISO = parseExcelDate(dateRaw);
